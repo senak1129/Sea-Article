@@ -23,6 +23,11 @@ BizRedis:
   ReadOnly: false
   
 
+Prometheus:
+  Host: 0.0.0.0
+  Port: 9094
+  Path: /metrics
+
 DevServer:
   Enabled: true
   Host: 0.0.0.0

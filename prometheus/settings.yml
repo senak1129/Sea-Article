@@ -34,10 +34,38 @@ scrape_configs:
     static_configs:
       - targets: ["minio:9000"]
 
+  - job_name: "article-api"
+    static_configs:
+      - targets: ["host.docker.internal:9091"]
+
   - job_name: "article-rpc"
     static_configs:
       - targets: ["host.docker.internal:9092"]
 
+  - job_name: "security-rpc"
+    static_configs:
+      - targets: ["host.docker.internal:9093"]
+
   - job_name: "user-rpc"
     static_configs:
       - targets: ["host.docker.internal:9094"]
+
+  - job_name: "user-api"
+    static_configs:
+      - targets: ["host.docker.internal:9095"]
+
+  - job_name: "admin-api"
+    static_configs:
+      - targets: ["host.docker.internal:9096"]
+
+  - job_name: "admin-rpc"
+    static_configs:
+      - targets: ["host.docker.internal:9097"]
+
+  - job_name: "message-api"
+    static_configs:
+      - targets: ["host.docker.internal:16066"]
+
+  - job_name: "message-rpc"
+    static_configs:
+      - targets: ["host.docker.internal:16067"]
