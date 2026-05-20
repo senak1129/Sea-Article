@@ -14,10 +14,14 @@ AdDetection:
   Timeout: 1000
   Model: "Qwen3-max"
 
-Prometheus:
+DevServer:
+  Enabled: true
   Host: 0.0.0.0
   Port: 9093
-  Path: /metrics
+  MetricsPath: /metrics
+  HealthPath: /healthz
+  EnableMetrics: true
+  EnablePprof: true
 
 Log:
   ServiceName: security

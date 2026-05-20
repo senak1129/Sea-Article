@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 
+	"github.com/zeromicro/go-zero/core/logx"
 	"sea-try-go/service/security/rpc/internal/config"
 	contentsecurityserviceServer "sea-try-go/service/security/rpc/internal/server/contentsecurityservice"
 	imagesecurityserviceServer "sea-try-go/service/security/rpc/internal/server/imagesecurityservice"
@@ -26,6 +27,7 @@ func main() {
 
 	var c config.Config
 	conf.MustLoad(*configFile, &c)
+	logx.MustSetup(c.Log)
 	ctx := svc.NewServiceContext(c)
 
 	logger.Init("security-rpc")

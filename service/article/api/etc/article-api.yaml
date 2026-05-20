@@ -32,10 +32,14 @@ Log:
   Mode: file
   Path: /app/log
 
-Prometheus:
+DevServer:
+  Enabled: true
   Host: 0.0.0.0
   Port: 9091
-  Path: /metrics
+  MetricsPath: /metrics
+  HealthPath: /healthz
+  EnableMetrics: true
+  EnablePprof: true
 
 Telemetry:
   Name: article-api
