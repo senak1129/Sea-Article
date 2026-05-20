@@ -49,7 +49,9 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/sea-${{ matrix.service }}:latest
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/sea-${{ matrix.service }}:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/sea-${{ matrix.service }}:${{ github.sha }}
           build-args: |
             SERVICE_NAME=${{ matrix.service }}
             BUILD_API=${{ matrix.api_path != '' && '1' || '0' }}
@@ -83,6 +85,18 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
             cd /root/SeaTest
-            docker compose pull
-            docker compose up -d --force-recreate --remove-orphans
+            export ARTICLE_IMAGE_TAG=${{ github.sha }}
+            export USER_IMAGE_TAG=${{ github.sha }}
+            export ADMIN_IMAGE_TAG=${{ github.sha }}
+            export MESSAGE_IMAGE_TAG=${{ github.sha }}
+            export SECURITY_IMAGE_TAG=${{ github.sha }}
+            for attempt in 1 2 3; do
+              docker compose pull sea-article sea-user sea-admin sea-message sea-security && break
+              if [ "$attempt" = "3" ]; then
+                echo "docker compose pull failed after 3 attempts" >&2
+                exit 1
+              fi
+              sleep 10
+            done
+            docker compose up -d --force-recreate --remove-orphans sea-article sea-user sea-admin sea-message sea-security
             docker image prune -f

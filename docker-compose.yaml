@@ -158,6 +158,8 @@ services:
       - prometheus_data:/prometheus
     ports:
       - "39090:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
   # --- Grafana ---
@@ -229,7 +231,7 @@ services:
   # ===================== 你的业务微服务 =====================
 
   sea-article:
-    image: senak1129/sea-article:latest
+    image: senak1129/sea-article:${ARTICLE_IMAGE_TAG:-latest}
     container_name: sea-article
     restart: always
     network_mode: host
@@ -248,7 +250,7 @@ services:
       - OTEL_ADDR=127.0.0.1:34317
 
   sea-user:
-    image: senak1129/sea-user:latest
+    image: senak1129/sea-user:${USER_IMAGE_TAG:-latest}
     container_name: sea-user
     restart: always
     network_mode: host
@@ -267,7 +269,7 @@ services:
       - OTEL_ADDR=127.0.0.1:34317
 
   sea-admin:
-    image: senak1129/sea-admin:latest
+    image: senak1129/sea-admin:${ADMIN_IMAGE_TAG:-latest}
     container_name: sea-admin
     restart: always
     network_mode: host
@@ -286,7 +288,7 @@ services:
       - OTEL_ADDR=127.0.0.1:34317
 
   sea-message:
-    image: senak1129/sea-message:latest
+    image: senak1129/sea-message:${MESSAGE_IMAGE_TAG:-latest}
     container_name: sea-message
     restart: always
     network_mode: host
@@ -305,7 +307,7 @@ services:
       - OTEL_ADDR=127.0.0.1:34317
 
   sea-security:
-    image: senak1129/sea-security:latest
+    image: senak1129/sea-security:${SECURITY_IMAGE_TAG:-latest}
     container_name: sea-security
     restart: always
     network_mode: host
