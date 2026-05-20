@@ -1,0 +1,77 @@
+syntax = "proto3";
+
+package hot;
+option go_package = "./pb";
+
+// ==================== 热点系统 ====================
+
+// 获取热门文章请求
+message GetHotArticlesRequest {
+  int32 top_k = 1;  // 返回前 K 篇，默认 20，最大 100
+}
+
+// 热门文章条目
+message HotArticleItem {
+  string article_id = 1;
+  uint32 hot_score  = 2;
+}
+
+// 获取热门文章响应
+message GetHotArticlesResponse {
+  repeated HotArticleItem items = 1;
+}
+
+// ==================== 互动接口（预留） ====================
+
+// 点赞请求
+message LikeArticleRequest {
+  string article_id = 1;
+  string user_id    = 2;
+}
+
+message LikeArticleResponse {
+  bool success = 1;
+}
+
+// 评论请求（评论内容由评论服务管理，此处仅触发热度事件）
+message CommentArticleRequest {
+  string article_id = 1;
+  string user_id    = 2;
+}
+
+message CommentArticleResponse {
+  bool success = 1;
+}
+
+// 投币请求
+message CoinArticleRequest {
+  string article_id = 1;
+  string user_id    = 2;
+  int32  coin_count = 3;  // 投币数量（1 或 2）
+}
+
+message CoinArticleResponse {
+  bool success = 1;
+}
+
+// 分享请求
+message ShareArticleRequest {
+  string article_id = 1;
+  string user_id    = 2;
+  string channel    = 3;  // 分享渠道（"wechat" | "weibo" | "qq" | "link"）
+}
+
+message ShareArticleResponse {
+  bool success = 1;
+}
+
+// 热点服务定义
+service HotService {
+  rpc GetHotArticles(GetHotArticlesRequest) returns (GetHotArticlesResponse);
+
+  // 互动接口（预留，点赞/评论/投币/分享系统实现后补充逻辑）
+  rpc LikeArticle(LikeArticleRequest) returns (LikeArticleResponse);
+  rpc CommentArticle(CommentArticleRequest) returns (CommentArticleResponse);
+  rpc CoinArticle(CoinArticleRequest) returns (CoinArticleResponse);
+  rpc ShareArticle(ShareArticleRequest) returns (ShareArticleResponse);
+}

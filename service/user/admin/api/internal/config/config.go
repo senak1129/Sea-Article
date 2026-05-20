@@ -1,0 +1,26 @@
+// Code scaffolded by goctl. Safe to edit.
+// goctl 1.9.2
+
+package config
+
+import (
+	"github.com/zeromicro/go-zero/rest"
+	"github.com/zeromicro/go-zero/zrpc"
+)
+
+type Config struct {
+	rest.RestConf
+	AdminAuth struct {
+		AccessSecret string
+		AccessExpire int64
+	}
+	AdminRpc zrpc.RpcClientConf
+	BizRedis struct {
+		Mode     string   `json:",optional"`
+		Host     string   `json:",optional"`
+		Sentinel []string `json:",optional"`
+		Master   string   `json:",optional"`
+		Pass     string   `json:",optional"`
+		ReadOnly bool     `json:",optional"`
+	}
+}

@@ -1,0 +1,50 @@
+Name: user.rpc
+ListenOn: 0.0.0.0:6665
+
+Log:
+  ServiceName: user-rpc
+  Mode: file
+  Path: /app/log
+
+Postgres:
+  Host: "127.0.0.1"
+  Port: "35432"
+  User: "admin"
+  Password: "Sea-TryGo"
+  DBName: "first_db"
+  Mode: "disable"
+
+BizRedis:
+  Mode: sentinel
+  Sentinel:
+    - 127.0.0.1:26379
+  Master: mymaster
+  Pass: !!str "123456"
+  ReadOnly: false
+  
+
+DevServer:
+  Enabled: true
+  Host: 0.0.0.0
+  Port: 9094
+  MetricsPath: /metrics
+  HealthPath: /healthz
+  EnableMetrics: true
+  EnablePprof: true
+
+
+UserAuth:
+  AccessSecret: ae0536f9-6450-4606-8e13-5a19ed505da0
+  AccessExpire: 2592000
+
+Telemetry:
+  Name: user-rpc
+  Endpoint: localhost:34317
+  Sampler: 1.0
+  Batcher: otlpgrpc
+
+
+Etcd:
+  Hosts:
+    - 127.0.0.1:32379
+  Key: user.rpc

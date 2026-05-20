@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package task;
+option go_package = ".";
+
+message Task{
+  string name = 1;
+  string desc = 2;
+  int64 task_id = 3;
+  int64 completion_progress = 4; // 完成进度
+  int64 required_progress = 5;  // 总要求进度
+}
+
+message GetTaskReq{
+  int64 user_id = 1;
+}
+
+message GetTaskResp{
+  repeated Task task = 1;
+}
+
+service TaskService{
+  rpc GetTask(GetTaskReq) returns (GetTaskResp); //获取用户的任务进度
+}

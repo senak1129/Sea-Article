@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+package favorite;
+option go_package = ".";
+
+message FavoriteFolder {
+  int64 folder_id = 1;
+  int64 user_id = 2;
+  string name = 3;
+  int64 created_at = 4;
+  int64 updated_at = 5;
+}
+
+message FavoriteItem {
+  int64 favorite_id = 1;
+  int64 folder_id = 2;
+  int64 user_id = 3;
+  string target_id = 4;     // 被收藏对象ID，比如文章ID
+  string target_type = 5;   // 被收藏对象类型，比如 article / post / video
+  string title = 6;         // 冗余展示字段，可选
+  string cover = 7;         // 冗余展示字段，可选
+  int64 created_at = 8;
+}
+
+/************** 1. 新增收藏夹 **************/
+message CreateFavoriteFolderReq {
+  int64 user_id = 1;
+  string name = 2;
+}
+
+message CreateFavoriteFolderResp {
+  int64 folder_id = 1;
+}
+
+/************** 2. 新增收藏 **************/
+message CreateFavoriteReq {
+  int64 user_id = 1;
+  int64 folder_id = 2;
+  string target_id = 3;
+  string target_type = 4;
+  string title = 5;
+  string cover = 6;
+}
+
+message CreateFavoriteResp {
+  int64 favorite_id = 1;
+}
+
+/************** 3. 删除收藏夹 **************/
+message DeleteFavoriteFolderReq {
+  int64 user_id = 1;
+  int64 folder_id = 2;
+}
+
+message DeleteFavoriteFolderResp {
+  bool success = 1;
+}
+
+/************** 4. 删除收藏 **************/
+message DeleteFavoriteReq {
+  int64 user_id = 1;
+  int64 favorite_id = 2;
+}
+
+message DeleteFavoriteResp {
+  bool success = 1;
+}
+
+/************** 5. 修改收藏夹名字 **************/
+message UpdateFavoriteFolderNameReq {
+  int64 user_id = 1;
+  int64 folder_id = 2;
+  string name = 3;
+}
+
+message UpdateFavoriteFolderNameResp {
+  bool success = 1;
+}
+
+/************** 6. 查询收藏夹 **************/
+message GetFavoriteFoldersReq {
+  int64 user_id = 1;
+}
+
+message GetFavoriteFoldersResp {
+  repeated FavoriteFolder folders = 1;
+}
+
+/************** 7. 查询收藏夹下的收藏 **************/
+message GetFavoritesByFolderReq {
+  int64 user_id = 1;
+  int64 folder_id = 2;
+}
+
+message GetFavoritesByFolderResp {
+  repeated FavoriteItem favorites = 1;
+}
+
+service FavoriteService {
+  rpc CreateFavoriteFolder(CreateFavoriteFolderReq) returns (CreateFavoriteFolderResp);
+  rpc CreateFavorite(CreateFavoriteReq) returns (CreateFavoriteResp);
+  rpc DeleteFavoriteFolder(DeleteFavoriteFolderReq) returns (DeleteFavoriteFolderResp);
+  rpc DeleteFavorite(DeleteFavoriteReq) returns (DeleteFavoriteResp);
+  rpc UpdateFavoriteFolderName(UpdateFavoriteFolderNameReq) returns (UpdateFavoriteFolderNameResp);
+  rpc GetFavoriteFolders(GetFavoriteFoldersReq) returns (GetFavoriteFoldersResp);
+  rpc GetFavoritesByFolder(GetFavoritesByFolderReq) returns (GetFavoritesByFolderResp);
+}

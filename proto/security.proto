@@ -1,0 +1,183 @@
+syntax = "proto3";
+
+package security;
+
+option go_package = "sea-try-go/service/security/rpc/pb";
+
+// 可观测性上下文 - 用于端到端链路追踪
+message ObservabilityContext {
+  // 贯穿整条链路的唯一追踪ID
+  string trace_id = 1;
+  // 当前步骤的Span ID
+  string span_id = 2;
+  // 父Span ID（用于构建调用树）
+  string parent_span_id = 3;
+  // 业务请求ID
+  string request_id = 4;
+  // 场景入口（低基数，便于聚合）
+  string surface = 5;
+  // 实验ID列表
+  repeated ExperimentInfo exp_ids = 6;
+}
+
+// 实验信息
+message ExperimentInfo {
+  string name = 1;
+  string variant = 2;
+}
+
+// 决策记录 - 记录AI/系统的决策过程
+message DecisionRecord {
+  // 决策类型（枚举：route/retrieve/tool_select等）
+  string type = 1;
+  // 选择的动作/路径
+  string chosen = 2;
+  // 决策置信度（0.0-1.0）
+  float confidence = 3;
+  // 决策原因码（结构化，便于聚合告警）
+  repeated string reason_codes = 4;
+  // 信号摘要（严控基数）
+  map<string, string> signals = 5;
+  // 约束/门槛
+  DecisionConstraints constraints = 6;
+  // 备选方案（最多2-3个）
+  repeated AlternativeDecision alternatives = 7;
+  // 大对象引用（避免直接存储大字段）
+  ArtifactsReference artifacts_ref = 8;
+}
+
+// 决策约束
+message DecisionConstraints {
+  int32 max_latency_ms = 1;
+  int32 max_tool_calls = 2;
+  bool must_cite_sources = 3;
+}
+
+// 备选决策
+message AlternativeDecision {
+  string action = 1;
+  float score = 2;
+  string reject_code = 3;
+}
+
+// 大对象引用
+message ArtifactsReference {
+  string prompt_ref = 1;
+  string tool_io_ref = 2;
+  string retrieval_ref = 3;
+  string response_ref = 4;
+}
+
+// 质量验证结果
+message QualityValidation {
+  // Schema校验是否通过
+  bool schema_valid = 1;
+  // 引用校验是否通过
+  bool citation_valid = 2;
+  // 声明与检索一致性检查
+  // PASS: 通过, FAIL_CLAIMED_BUT_EMPTY: 声称有依据但为空, FAIL_CITATION_MISSING: 缺少引用
+  string claim_grounding_check = 3;
+  // 违规项列表
+  repeated string violations = 4;
+}
+
+message SanitizeContentRequest {
+  string text = 1;
+  SanitizeOptions options = 2;
+  // 可观测性上下文
+  ObservabilityContext observability_context = 3;
+}
+
+message SanitizeOptions {
+  bool enable_html_sanitization = 1;
+  bool enable_ad_detection = 2;
+  bool enable_unicode_normalization = 3;
+  bool enable_whitespace_normalization = 4;
+}
+
+message SanitizeContentResponse {
+  string sanitized_text = 1;
+  bool is_ad = 2;
+  float ad_confidence = 3;
+  bool success = 4;
+  string error_message = 5;
+  // 可观测性上下文（用于响应链路追踪）
+  ObservabilityContext observability_context = 6;
+  // 决策记录
+  DecisionRecord decision = 7;
+  // 质量验证结果
+  QualityValidation quality = 8;
+  // 步骤耗时（毫秒）
+  int32 latency_ms = 9;
+  // Token使用量
+  TokensUsage tokens = 10;
+}
+
+// Token使用量
+message TokensUsage {
+  int32 tokens_in = 1;
+  int32 tokens_out = 2;
+}
+
+service ContentSecurityService {
+  rpc SanitizeContent(SanitizeContentRequest) returns (SanitizeContentResponse);
+}
+
+message SingleImageRequest {
+  string image_url = 1;
+  string image_base64 = 2;
+  string context = 3;
+}
+
+message DetectImageAdBatchRequest {
+  repeated SingleImageRequest images = 1;
+  DetectOptions options = 2;
+  string batch_id = 3;
+}
+
+message SingleImageResponse {
+  bool is_ad = 1;
+  float ad_confidence = 2;
+  string extracted_text = 3;
+  bool success = 4;
+  string error_message = 5;
+  string image_id = 6;
+  int32 processing_time_ms = 7;
+  int32 image_size_bytes = 8;
+}
+
+message DetectOptions {
+  bool enable_ad_detection = 1;
+  float confidence_threshold = 2;
+  bool enable_text_extraction = 3;
+}
+
+message DetectImageAdBatchResponse {
+  repeated SingleImageResponse results = 1;
+  bool success = 2;
+  string error_message = 3;
+  string batch_id = 4;
+  int32 total_processing_time_ms = 5;
+  int32 successful_count = 6;
+  int32 failed_count = 7;
+  float ad_detection_rate = 8;
+}
+
+service ImageSecurityService {
+  rpc DetectImageAd(DetectImageAdRequest) returns (DetectImageAdResponse);
+  rpc DetectImageAdBatch(DetectImageAdBatchRequest) returns (DetectImageAdBatchResponse);
+}
+
+message DetectImageAdRequest {
+  string image_url = 1;
+  string image_base64 = 2;
+  DetectOptions options = 3;
+}
+
+message DetectImageAdResponse {
+  bool is_ad = 1;
+  float ad_confidence = 2;
+  string extracted_text = 3;
+  bool success = 4;
+  string error_message = 5;
+}

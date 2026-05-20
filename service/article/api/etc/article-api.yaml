@@ -1,0 +1,51 @@
+Name: article-api
+Host: 0.0.0.0
+Port: 7777
+Timeout: 3000
+MaxBytes: 10485760
+
+ArticleRpcConf:
+  Etcd:
+    Hosts:
+      - 127.0.0.1:32379
+    Key: article.rpc
+  Timeout: 3000
+
+SecurityRpcConf:
+  Etcd:
+    Hosts:
+      - 127.0.0.1:32379
+    Key: security.rpc
+
+UserRpcConf:
+  Etcd:
+    Hosts:
+      - 127.0.0.1:32379
+    Key: user.rpc
+
+Auth:
+  AccessSecret: ae0536f9-6450-4606-8e13-5a19ed505da0
+  AccessExpire: 31536000
+
+Log:
+  ServiceName: article-api
+  Mode: file
+  Path: /app/log
+
+Telemetry:
+  Name: article-api
+  Endpoint: localhost:34317
+  Sampler: 1.0
+  Batcher: otlpgrpc
+
+BizRedis:
+  Mode: sentinel
+  Sentinel:
+    - 127.0.0.1:26379
+  Master: mymaster
+  Pass: !!str "123456"
+  ReadOnly: false
+
+RateLimit:
+  Rate: 10
+  Burst: 20
