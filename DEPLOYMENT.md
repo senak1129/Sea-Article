@@ -23,10 +23,10 @@
 GitHub Push (main)
       │
       ▼
-GitHub Actions ──► Docker Hub (senak1129/sea-*)
+GitHub Actions ──► Docker Hub (latest + <git-sha>)
       │
       ▼
-SSH Deploy ──► 服务器 docker compose up
+SSH Deploy ──► 服务器按 <git-sha> pull + up
       │
       ▼
 ┌─────────────────────────────────────────────────────┐
@@ -289,17 +289,18 @@ cat ~/.ssh/id_ed25519
 push to main
     │
     ├── Job 1: build-and-push (并行构建 5 个镜像)
-    │   ├── article  → senak1129/sea-article:latest
-    │   ├── message  → senak1129/sea-message:latest
-    │   ├── security → senak1129/sea-security:latest
-    │   ├── user     → senak1129/sea-user:latest
-    │   └── admin    → senak1129/sea-admin:latest
+    │   ├── article  → latest + <git-sha>
+    │   ├── message  → latest + <git-sha>
+    │   ├── security → latest + <git-sha>
+    │   ├── user     → latest + <git-sha>
+    │   └── admin    → latest + <git-sha>
     │
     └── Job 2: deploy (依赖 Job 1 全部完成)
         ├── scp docker-compose.yaml → 服务器 /root/SeaTest/
         └── ssh 执行：
             cd /root/SeaTest
-            docker compose pull
+            export *_IMAGE_TAG=<git-sha>
+            docker compose pull (失败自动重试)
             docker compose up -d --force-recreate --remove-orphans
             docker image prune -f
 ```
@@ -334,13 +335,15 @@ cd Sea-Article
 以 article 服务为例：
 
 ```bash
+TAG=$(git rev-parse HEAD)
 docker build \
   --build-arg SERVICE_NAME=article \
   --build-arg BUILD_API=1 \
   --build-arg BUILD_RPC=1 \
   --build-arg API_BUILD_PATH=./service/article/api/ \
   --build-arg RPC_BUILD_PATH=./service/article/rpc/ \
-  -t senak1129/sea-article:latest .
+  -t senak1129/sea-article:latest \
+  -t senak1129/sea-article:${TAG} .
 ```
 
 对其他服务重复此步骤，修改对应的 `SERVICE_NAME` 和路径。
@@ -350,6 +353,7 @@ docker build \
 ```bash
 docker login
 docker push senak1129/sea-article:latest
+docker push senak1129/sea-article:${TAG}
 # ... 其他镜像
 ```
 
@@ -358,8 +362,9 @@ docker push senak1129/sea-article:latest
 ```bash
 cp docker-compose.yaml /root/SeaTest/
 cd /root/SeaTest
-docker compose pull
-docker compose up -d --force-recreate --remove-orphans
+export ARTICLE_IMAGE_TAG=${TAG}
+docker compose pull sea-article
+docker compose up -d --force-recreate sea-article
 ```
 
 ---
@@ -387,11 +392,11 @@ docker compose up -d --force-recreate --remove-orphans
 
 | 服务 | API 端口 | RPC 端口 | Prometheus 指标端口 |
 |------|---------|---------|-------------------|
-| article | 7777 | 6666 | 9092 |
+| article | 7777 | 6666 | 9091 (API) / 9092 (RPC) |
 | user | 7776 | 6665 | 9094 (RPC) / 9095 (API) |
 | admin | 7779 | 6669 | 9096 (API) / 9097 (RPC) |
 | message | 7778 | 6667 | 16066 (API) / 16067 (RPC) |
-| security | 无 API | 6668 | — |
+| security | 无 API | 6668 | 9093 (RPC) |
 
 ---
 
@@ -453,8 +458,9 @@ docker compose restart sea-article
 ### 更新服务（仅拉取新镜像）
 
 ```bash
+export ARTICLE_IMAGE_TAG=<git-sha>
 docker compose pull sea-article
-docker compose up -d sea-article
+docker compose up -d --force-recreate sea-article
 ```
 
 ### 清理悬空镜像
@@ -500,17 +506,15 @@ docker compose logs sea-article
 
 ### Q: 如何回滚到上一个版本？
 
-**A:** Docker Hub 上的 `latest` 标签会被覆盖。如果需要回滚：
+**A:** 现在优先使用 `git sha` 或 digest 回滚，而不是依赖 `latest`。
 
 ```bash
-# 查看本地镜像历史
-docker images | grep sea-article
-
-# 使用特定 digest 启动
+export ARTICLE_IMAGE_TAG=<previous-git-sha>
+docker compose pull sea-article
 docker compose up -d --force-recreate sea-article
 ```
 
-建议在稳定版本时打上带版本号的 tag（如 `v1.0.0`），方便回滚。
+如果需要更强的不可变保证，也可以直接使用镜像 digest 进行回滚。
 
 ### Q: 如何添加新的微服务？
 
