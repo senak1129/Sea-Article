@@ -21,6 +21,7 @@ func NewArticleSyncOutboxSender(svcCtx *svc.ServiceContext) *ArticleSyncOutboxSe
 	return &ArticleSyncOutboxSender{svcCtx: svcCtx}
 }
 func (s *ArticleSyncOutboxSender) SendPending(ctx context.Context, limit int) error {
+	return nil
 	maxRetry := s.svcCtx.Config.ArticleSyncOutbox.MaxRetry
 	events, err := s.svcCtx.ArticleSyncOutbox.FetchPending(ctx, limit, maxRetry)
 	if err != nil {
