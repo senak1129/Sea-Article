@@ -36,6 +36,7 @@ func NewArticleConsumer(ctx context.Context, svcCtx *svc.ServiceContext) *Articl
 }
 
 func (l *ArticleConsumer) Consume(ctx context.Context, key, val string) error {
+	return nil
 	logger.LogInfo(ctx, "article review consumer received message")
 
 	var msg ArticleReviewMessage
