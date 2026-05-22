@@ -38,16 +38,6 @@ func (c *TTLCache[T]) Set(key string, val T, ttl time.Duration) {
 	c.c.SetWithTTL(key, val, 1, ttl)
 }
 
-// SetSync writes to the cache and blocks until the item is visible to reads.
-// Use this when read-after-write consistency is required (e.g. backfilling from Redis).
-func (c *TTLCache[T]) SetSync(key string, val T, ttl time.Duration) {
-	if ttl <= 0 {
-		ttl = 5 * time.Minute
-	}
-	c.c.SetWithTTL(key, val, 1, ttl)
-	c.c.Wait()
-}
-
 func (c *TTLCache[T]) Del(key string) {
 	c.c.Del(key)
 }

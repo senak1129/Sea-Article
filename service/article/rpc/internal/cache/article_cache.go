@@ -86,7 +86,7 @@ func (c *ArticleCache) GetDetail(ctx context.Context, id string) (*pb.Article, e
 	if err := json.Unmarshal([]byte(val), &a); err != nil {
 		return nil, err
 	}
-	c.localDetail.SetSync(detailKey(id), &a, defaultDetailTTL)
+	c.localDetail.Set(detailKey(id), &a, defaultDetailTTL)
 	return &a, nil
 }
 
@@ -108,10 +108,6 @@ func (c *ArticleCache) SetDetail(ctx context.Context, id string, a *pb.Article, 
 		return err
 	}
 	c.localDetail.Set(detailKey(id), a, ttl)
-	// 通知其他实例清除本地缓存
-	if err := c.rdb.Publish(ctx, invalidateChannel, detailKey(id)).Err(); err != nil {
-		logx.Errorf("publish invalidate detail channel failed, id: %s, err: %v", id, err)
-	}
 	return nil
 }
 
@@ -136,6 +132,11 @@ func (c *ArticleCache) GetList(ctx context.Context, in *pb.ListArticlesRequest) 
 	if v, ok := c.localList.Get(key); ok {
 		return v, nil
 	}
+	if ok, err := c.IsNilList(ctx, in); ok {
+		return nil, nil
+	} else if err != nil {
+		logx.Errorf("IsNilList failed, in: %v, err: %v", in, err)
+	}
 	val, err := c.rdb.Get(ctx, listKey(in)).Result()
 	if err != nil {
 		if err == redis.Nil {
@@ -147,7 +148,7 @@ func (c *ArticleCache) GetList(ctx context.Context, in *pb.ListArticlesRequest) 
 	if err := json.Unmarshal([]byte(val), &resp); err != nil {
 		return nil, err
 	}
-	c.localList.SetSync(key, &resp, defaultListTTL)
+	c.localList.Set(key, &resp, defaultListTTL)
 	return &resp, nil
 }
 
@@ -167,10 +168,6 @@ func (c *ArticleCache) SetList(ctx context.Context, in *pb.ListArticlesRequest, 
 		return err
 	}
 	c.localList.Set(key, resp, ttl)
-	// 通知其他实例清除本地缓存
-	if err := c.rdb.Publish(ctx, invalidateChannel, key).Err(); err != nil {
-		logx.Errorf("publish invalidate list channel failed, key: %s, err: %v", key, err)
-	}
 	return nil
 }
 
@@ -191,16 +188,13 @@ func (c *ArticleCache) DelList(ctx context.Context, in *pb.ListArticlesRequest) 
 func (c *ArticleCache) GetOrLoadDetail(ctx context.Context, id string, ttl time.Duration, loader func() (*pb.Article, error)) (*pb.Article, error) {
 	if v, err := c.GetDetail(ctx, id); err == nil && v != nil {
 		return v, nil
+	} else if err != nil {
+		logx.Errorf("GetDetail failed in GetOrLoadDetail, id: %s, err: %v", id, err)
 	}
 	key := "detail:" + id
 	v, err, _ := c.sf.Do(key, func() (interface{}, error) {
 		if v, err := c.GetDetail(ctx, id); err == nil && v != nil {
 			return v, nil
-		}
-		if ok, err := c.IsNilDetail(ctx, id); ok {
-			return nil, nil
-		} else if err != nil {
-			logx.Errorf("IsNilDetail failed in GetOrLoadDetail, id: %s, err: %v", id, err)
 		}
 		a, e := loader()
 		if e != nil {
@@ -261,21 +255,13 @@ func (c *ArticleCache) IsNilList(ctx context.Context, in *pb.ListArticlesRequest
 func (c *ArticleCache) GetOrLoadList(ctx context.Context, in *pb.ListArticlesRequest, ttl time.Duration, loader func() (*pb.ListArticlesResponse, error)) (*pb.ListArticlesResponse, error) {
 	if v, err := c.GetList(ctx, in); err == nil && v != nil {
 		return v, nil
-	}
-	if ok, err := c.IsNilList(ctx, in); ok {
-		return nil, nil
 	} else if err != nil {
-		logx.Errorf("IsNilList failed, in: %v, err: %v", in, err)
+		logx.Errorf("GetList failed in GetOrLoadList, in: %v, err: %v", in, err)
 	}
 	key := "list:" + listKey(in)
 	v, err, _ := c.sf.Do(key, func() (interface{}, error) {
 		if v, err := c.GetList(ctx, in); err == nil && v != nil {
 			return v, nil
-		}
-		if ok, err := c.IsNilList(ctx, in); ok {
-			return nil, nil
-		} else if err != nil {
-			logx.Errorf("IsNilList failed in GetOrLoadList, in: %v, err: %v", in, err)
 		}
 		resp, e := loader()
 		if e != nil {
@@ -347,23 +333,52 @@ func (c *ArticleCache) startInvalidateSubscriber(ctx context.Context) {
 	}
 
 	go func() {
-		pubsub := c.rdb.Subscribe(ctx, invalidateChannel)
-		defer pubsub.Close()
-		ch := pubsub.Channel()
+		backoff := 1 * time.Second
+		maxBackoff := 60 * time.Second
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case m, ok := <-ch:
-				if !ok {
-					return
+			default:
+				pubsub := c.rdb.Subscribe(ctx, invalidateChannel)
+				ch := pubsub.Channel()
+				logx.Infof("subscribed to invalidate channel: %s", invalidateChannel)
+
+				exitLoop := false
+				for !exitLoop {
+					select {
+					case <-ctx.Done():
+						pubsub.Close()
+						return
+					case m, ok := <-ch:
+						if !ok {
+							logx.Errorf("invalidate channel closed, reconnecting...")
+							exitLoop = true
+							break
+						}
+						// 成功接收到消息，重置退避时间
+						backoff = 1 * time.Second
+						keys := strings.Split(m.Payload, ",")
+						for _, k := range keys {
+							if strings.HasPrefix(k, "article:detail:") {
+								c.localDetail.Del(k)
+							} else if strings.HasPrefix(k, "article:list:") {
+								c.localList.Del(k)
+							}
+						}
+					}
 				}
-				keys := strings.Split(m.Payload, ",")
-				for _, k := range keys {
-					if strings.HasPrefix(k, "article:detail:") {
-						c.localDetail.Del(k)
-					} else if strings.HasPrefix(k, "article:list:") {
-						c.localList.Del(k)
+				pubsub.Close()
+
+				// 指数退避
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+					backoff *= 2
+					if backoff > maxBackoff {
+						backoff = maxBackoff
 					}
 				}
 			}
