@@ -1,115 +1,60 @@
-name: Build and Deploy
+name: Build and Deploy (Article Only)
 
 on:
   push:
     branches: [ "main" ]
-
-# 核心：防止多个 build 任务完成后同时 SSH 登录服务器导致部署冲突
-concurrency:
-  group: production_deploy
-  cancel-in-progress: false
+    # 1. 只有这些路径变动时才运行 CD
+    paths:
+      - 'service/article/**'
+      - 'service/common/**'
+      - 'proto/article.proto'
+      - 'docker-compose.yaml'
+      - '.github/workflows/deploy.yml'
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - service: article
-            api_path: ./service/article/api/
-            rpc_path: ./service/article/rpc/
-          - service: message
-            api_path: ./service/message/api/
-            rpc_path: ./service/message/rpc/
-          - service: security
-            api_path: ""
-            rpc_path: ./service/security/rpc/
-          - service: user
-            api_path: ./service/user/user/api/
-            rpc_path: ./service/user/user/rpc/
-          - service: admin
-            api_path: ./service/user/admin/api/
-            rpc_path: ./service/user/admin/rpc/
-
+    # 2. 简化 Matrix，只保留 article
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build and push
+      # ... (省略中间的 Docker Login 等步骤) ...
+      - name: Build and push Article
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/sea-${{ matrix.service }}:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/sea-${{ matrix.service }}:${{ github.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/sea-article:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/sea-article:${{ github.sha }}
           build-args: |
-            SERVICE_NAME=${{ matrix.service }}
-            BUILD_API=${{ matrix.api_path != '' && '1' || '0' }}
-            BUILD_RPC=${{ matrix.rpc_path != '' && '1' || '0' }}
-            API_BUILD_PATH=${{ matrix.api_path }}
-            RPC_BUILD_PATH=${{ matrix.rpc_path }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            SERVICE_NAME=article
+            BUILD_API=1
+            BUILD_RPC=1
+            API_BUILD_PATH=./service/article/api/
+            RPC_BUILD_PATH=./service/article/rpc/
 
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Copy docker-compose.yaml to server
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          source: "docker-compose.yaml"
-          target: "/root/SeaTest"
-          timeout: 60s
-          command_timeout: 2m
-
-      - name: Deploy to Server
+      - name: Deploy Article Only
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          command_timeout: 15m
           script: |
             cd /root/SeaTest
+            # 3. 只更新 article 的 Tag
             export ARTICLE_IMAGE_TAG=${{ github.sha }}
-            export USER_IMAGE_TAG=${{ github.sha }}
-            export ADMIN_IMAGE_TAG=${{ github.sha }}
-            export MESSAGE_IMAGE_TAG=${{ github.sha }}
-            export SECURITY_IMAGE_TAG=${{ github.sha }}
             
-            echo "Starting sequential pull..."
-            for svc in sea-article sea-user sea-admin sea-message sea-security; do
-              echo "Pulling $svc..."
-              for attempt in 1 2 3; do
-                docker compose pull $svc && break
-                sleep 5
-              done
-            done
-
-            echo "Starting sequential deploy..."
-            for svc in sea-article sea-user sea-admin sea-message sea-security; do
-              echo "Deploying $svc..."
-              docker compose up -d --force-recreate --remove-orphans $svc
-              # 给服务器留出 CPU 恢复时间
-              sleep 15
-            done
-
-            echo "Cleaning up old images..."
-            docker image prune -f
+            echo "Quick update for sea-article..."
+            # 4. 只 Pull 和 Up 目标服务
+            docker compose pull sea-article
+            
+            # 注意：去掉 --force-recreate，只更新有变动的服务
+            # docker compose up -d 会自动识别 ARTICLE_IMAGE_TAG 的变化并仅重启 sea-article
+            docker compose up -d sea-article
+            
+            echo "Article update complete."
