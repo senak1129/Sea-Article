@@ -136,9 +136,6 @@ func (s *articleCacheWorkersService) Start() {
 	workerCtx, cancel := context.WithCancel(s.ctx)
 	s.cancel = cancel
 
-	if s.svcCtx.ArticleCache != nil {
-		s.svcCtx.ArticleCache.StartInvalidateSubscriber(workerCtx)
-	}
 	if s.svcCtx.ViewCounter != nil {
 		s.svcCtx.ViewCounter.StartFlusher(workerCtx, s.svcCtx.ArticleRepo, func(ctx context.Context, id string) {
 			if s.svcCtx.ArticleCache != nil {
@@ -151,6 +148,9 @@ func (s *articleCacheWorkersService) Start() {
 func (s *articleCacheWorkersService) Stop() {
 	if s.cancel != nil {
 		s.cancel()
+	}
+	if s.svcCtx.ArticleCache != nil {
+		s.svcCtx.ArticleCache.Close()
 	}
 	if s.svcCtx.RedisClient != nil {
 		_ = s.svcCtx.RedisClient.Close()

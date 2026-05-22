@@ -24,12 +24,32 @@ const invalidateChannel = "article:cache:invalidate"
 type ArticleCache struct {
 	rdb         redis.UniversalClient
 	sf          singleflight.Group
-	localDetail TTLCache[*pb.Article]
-	localList   TTLCache[*pb.ListArticlesResponse]
+	localDetail *TTLCache[*pb.Article]
+	localList   *TTLCache[*pb.ListArticlesResponse]
+	cancel      context.CancelFunc
 }
 
-func NewArticleCache(rdb redis.UniversalClient) *ArticleCache {
-	return &ArticleCache{rdb: rdb}
+func NewArticleCache(ctx context.Context, rdb redis.UniversalClient) (*ArticleCache, error) {
+	detailCache, err := NewTTLCache[*pb.Article](10000)
+	if err != nil {
+		return nil, fmt.Errorf("init detail cache: %w", err)
+	}
+	listCache, err := NewTTLCache[*pb.ListArticlesResponse](5000)
+	if err != nil {
+		return nil, fmt.Errorf("init list cache: %w", err)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	subCtx, cancel := context.WithCancel(ctx)
+	c := &ArticleCache{
+		rdb:         rdb,
+		localDetail: detailCache,
+		localList:   listCache,
+		cancel:      cancel,
+	}
+	c.startInvalidateSubscriber(subCtx)
+	return c, nil
 }
 
 func detailKey(id string) string {
@@ -50,6 +70,11 @@ func (c *ArticleCache) GetDetail(ctx context.Context, id string) (*pb.Article, e
 	if v, ok := c.localDetail.Get(detailKey(id)); ok {
 		return v, nil
 	}
+	if ok, err := c.IsNilDetail(ctx, id); ok {
+		return nil, nil
+	} else if err != nil {
+		logx.Errorf("IsNilDetail failed, id: %s, err: %v", id, err)
+	}
 	val, err := c.rdb.Get(ctx, detailKey(id)).Result()
 	if err != nil {
 		if err == redis.Nil {
@@ -61,7 +86,7 @@ func (c *ArticleCache) GetDetail(ctx context.Context, id string) (*pb.Article, e
 	if err := json.Unmarshal([]byte(val), &a); err != nil {
 		return nil, err
 	}
-	c.localDetail.Set(detailKey(id), &a, defaultDetailTTL)
+	c.localDetail.SetSync(detailKey(id), &a, defaultDetailTTL)
 	return &a, nil
 }
 
@@ -78,13 +103,16 @@ func (c *ArticleCache) SetDetail(ctx context.Context, id string, a *pb.Article, 
 		logx.Errorf("SetDetail json marshal failed for id: %s, err: %v", id, err)
 		return err
 	}
-	c.localDetail.Set(detailKey(id), a, jitter(ttl))
-	
-	err = c.rdb.Set(ctx, detailKey(id), b, jitter(ttl)).Err()
-	if err != nil {
+	if err := c.rdb.Set(ctx, detailKey(id), b, ttl).Err(); err != nil {
 		logx.Errorf("SetDetail redis set failed for id: %s, err: %v", id, err)
+		return err
 	}
-	return err
+	c.localDetail.Set(detailKey(id), a, ttl)
+	// 通知其他实例清除本地缓存
+	if err := c.rdb.Publish(ctx, invalidateChannel, detailKey(id)).Err(); err != nil {
+		logx.Errorf("publish invalidate detail channel failed, id: %s, err: %v", id, err)
+	}
+	return nil
 }
 
 func (c *ArticleCache) DelDetail(ctx context.Context, id string) {
@@ -119,7 +147,7 @@ func (c *ArticleCache) GetList(ctx context.Context, in *pb.ListArticlesRequest) 
 	if err := json.Unmarshal([]byte(val), &resp); err != nil {
 		return nil, err
 	}
-	c.localList.Set(key, &resp, defaultListTTL)
+	c.localList.SetSync(key, &resp, defaultListTTL)
 	return &resp, nil
 }
 
@@ -135,8 +163,15 @@ func (c *ArticleCache) SetList(ctx context.Context, in *pb.ListArticlesRequest, 
 		return err
 	}
 	key := listKey(in)
-	c.localList.Set(key, resp, jitter(ttl))
-	return c.rdb.Set(ctx, key, b, jitter(ttl)).Err()
+	if err := c.rdb.Set(ctx, key, b, ttl).Err(); err != nil {
+		return err
+	}
+	c.localList.Set(key, resp, ttl)
+	// 通知其他实例清除本地缓存
+	if err := c.rdb.Publish(ctx, invalidateChannel, key).Err(); err != nil {
+		logx.Errorf("publish invalidate list channel failed, key: %s, err: %v", key, err)
+	}
+	return nil
 }
 
 func (c *ArticleCache) DelList(ctx context.Context, in *pb.ListArticlesRequest) {
@@ -162,8 +197,10 @@ func (c *ArticleCache) GetOrLoadDetail(ctx context.Context, id string, ttl time.
 		if v, err := c.GetDetail(ctx, id); err == nil && v != nil {
 			return v, nil
 		}
-		if ok, _ := c.IsNilDetail(ctx, id); ok {
+		if ok, err := c.IsNilDetail(ctx, id); ok {
 			return nil, nil
+		} else if err != nil {
+			logx.Errorf("IsNilDetail failed in GetOrLoadDetail, id: %s, err: %v", id, err)
 		}
 		a, e := loader()
 		if e != nil {
@@ -187,6 +224,9 @@ func (c *ArticleCache) GetOrLoadDetail(ctx context.Context, id string, ttl time.
 		logx.Errorf("GetOrLoadDetail singleflight do failed, id: %s, err: %v", id, err)
 		return nil, err
 	}
+	if v == nil {
+		return nil, nil
+	}
 	a, ok := v.(*pb.Article)
 	if !ok {
 		return nil, fmt.Errorf("type assert failed")
@@ -194,18 +234,58 @@ func (c *ArticleCache) GetOrLoadDetail(ctx context.Context, id string, ttl time.
 	return a, nil
 }
 
+func (c *ArticleCache) SetNilList(ctx context.Context, in *pb.ListArticlesRequest, ttl time.Duration) error {
+	if c == nil || c.rdb == nil || in == nil {
+		return nil
+	}
+	if ttl <= 0 {
+		ttl = 10 * time.Second
+	}
+	return c.rdb.Set(ctx, listKey(in)+":nil", "1", ttl).Err()
+}
+
+func (c *ArticleCache) IsNilList(ctx context.Context, in *pb.ListArticlesRequest) (bool, error) {
+	if c == nil || c.rdb == nil || in == nil {
+		return false, nil
+	}
+	val, err := c.rdb.Get(ctx, listKey(in)+":nil").Result()
+	if err != nil {
+		if err == redis.Nil {
+			return false, nil
+		}
+		return false, err
+	}
+	return val == "1", nil
+}
+
 func (c *ArticleCache) GetOrLoadList(ctx context.Context, in *pb.ListArticlesRequest, ttl time.Duration, loader func() (*pb.ListArticlesResponse, error)) (*pb.ListArticlesResponse, error) {
 	if v, err := c.GetList(ctx, in); err == nil && v != nil {
 		return v, nil
+	}
+	if ok, err := c.IsNilList(ctx, in); ok {
+		return nil, nil
+	} else if err != nil {
+		logx.Errorf("IsNilList failed, in: %v, err: %v", in, err)
 	}
 	key := "list:" + listKey(in)
 	v, err, _ := c.sf.Do(key, func() (interface{}, error) {
 		if v, err := c.GetList(ctx, in); err == nil && v != nil {
 			return v, nil
 		}
+		if ok, err := c.IsNilList(ctx, in); ok {
+			return nil, nil
+		} else if err != nil {
+			logx.Errorf("IsNilList failed in GetOrLoadList, in: %v, err: %v", in, err)
+		}
 		resp, e := loader()
 		if e != nil {
 			return nil, e
+		}
+		if resp == nil {
+			if err := c.SetNilList(ctx, in, 10*time.Second); err != nil {
+				logx.Errorf("set nil list cache failed, in: %v, err: %v", in, err)
+			}
+			return nil, nil
 		}
 		jitterTTL := jitter(ttl)
 		if err := c.SetList(ctx, in, resp, jitterTTL); err != nil {
@@ -215,6 +295,9 @@ func (c *ArticleCache) GetOrLoadList(ctx context.Context, in *pb.ListArticlesReq
 	})
 	if err != nil {
 		return nil, err
+	}
+	if v == nil {
+		return nil, nil
 	}
 	resp, ok := v.(*pb.ListArticlesResponse)
 	if !ok {
@@ -247,17 +330,21 @@ func (c *ArticleCache) IsNilDetail(ctx context.Context, id string) (bool, error)
 	return val == "1", nil
 }
 
-func (c *ArticleCache) StartInvalidateSubscriber(ctx context.Context) {
-	if c == nil || c.rdb == nil {
+func (c *ArticleCache) Close() {
+	if c == nil {
 		return
 	}
-	if ctx == nil {
-		ctx = context.Background()
+	if c.cancel != nil {
+		c.cancel()
 	}
+	c.localDetail.Close()
+	c.localList.Close()
+}
 
-	// 启动本地缓存的定期清理任务 (防止惰性删除导致的内存泄漏)
-	c.localDetail.StartCleanup(ctx, 5*time.Minute)
-	c.localList.StartCleanup(ctx, 5*time.Minute)
+func (c *ArticleCache) startInvalidateSubscriber(ctx context.Context) {
+	if c.rdb == nil {
+		return
+	}
 
 	go func() {
 		pubsub := c.rdb.Subscribe(ctx, invalidateChannel)
@@ -290,5 +377,8 @@ func jitter(ttl time.Duration) time.Duration {
 	}
 	p := 0.1
 	delta := time.Duration(float64(ttl) * p)
+	if delta <= 0 {
+		return ttl
+	}
 	return ttl + time.Duration(rand.Int63n(int64(delta))) - delta/2
 }

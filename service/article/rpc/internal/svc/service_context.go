@@ -81,7 +81,11 @@ func NewServiceContext(c config.Config, articleRepo *model.ArticleRepo) *Service
 				logx.Errorf("init redis failed: %v", err)
 			} else {
 				redisClient = rdb
-				articleCache = cache.NewArticleCache(rdb)
+				if ac, err := cache.NewArticleCache(context.Background(), rdb); err != nil {
+					logx.Errorf("init article cache failed: %v", err)
+				} else {
+					articleCache = ac
+				}
 				viewCounter = cache.NewViewCounter(rdb)
 			}
 		}
@@ -97,7 +101,11 @@ func NewServiceContext(c config.Config, articleRepo *model.ArticleRepo) *Service
 			logx.Errorf("init redis failed: %v", err)
 		} else {
 			redisClient = rdb
-			articleCache = cache.NewArticleCache(rdb)
+			if ac, err := cache.NewArticleCache(context.Background(), rdb); err != nil {
+				logx.Errorf("init article cache failed: %v", err)
+			} else {
+				articleCache = ac
+			}
 			viewCounter = cache.NewViewCounter(rdb)
 		}
 	default:

@@ -1,69 +1,61 @@
 package cache
 
 import (
-	"context"
-	"sync"
 	"time"
+
+	"github.com/dgraph-io/ristretto/v2"
 )
 
-type entry[T any] struct {
-	val    T
-	expire time.Time
+// TTLCache is a generic local cache backed by ristretto with per-key TTL support.
+type TTLCache[T any] struct {
+	c *ristretto.Cache[string, T]
 }
 
-type TTLCache[T any] struct {
-	m sync.Map
+// NewTTLCache creates a ristretto-backed TTL cache.
+// maxSize is the maximum number of items the cache can hold.
+func NewTTLCache[T any](maxSize int64) (*TTLCache[T], error) {
+	c, err := ristretto.NewCache(&ristretto.Config[string, T]{
+		NumCounters: maxSize * 10, // recommended 10x the max number of keys
+		MaxCost:     maxSize,      // each item costs 1 by default
+		BufferItems: 64,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &TTLCache[T]{c: c}, nil
 }
 
 func (c *TTLCache[T]) Get(key string) (T, bool) {
-	v, ok := c.m.Load(key)
-	if !ok {
-		var zero T
-		return zero, false
-	}
-	en := v.(entry[T])
-	if time.Now().After(en.expire) {
-		c.m.Delete(key)
-		var zero T
-		return zero, false
-	}
-	return en.val, true
+	return c.c.Get(key)
 }
 
+// Set writes to the cache asynchronously. The item may not be immediately visible
+// to subsequent reads due to ristretto's write buffer.
 func (c *TTLCache[T]) Set(key string, val T, ttl time.Duration) {
 	if ttl <= 0 {
 		ttl = 5 * time.Minute
 	}
-	c.m.Store(key, entry[T]{val: val, expire: time.Now().Add(ttl)})
+	c.c.SetWithTTL(key, val, 1, ttl)
+}
+
+// SetSync writes to the cache and blocks until the item is visible to reads.
+// Use this when read-after-write consistency is required (e.g. backfilling from Redis).
+func (c *TTLCache[T]) SetSync(key string, val T, ttl time.Duration) {
+	if ttl <= 0 {
+		ttl = 5 * time.Minute
+	}
+	c.c.SetWithTTL(key, val, 1, ttl)
+	c.c.Wait()
 }
 
 func (c *TTLCache[T]) Del(key string) {
-	c.m.Delete(key)
+	c.c.Del(key)
 }
 
 func (c *TTLCache[T]) Clear() {
-	c.m = sync.Map{}
+	c.c.Clear()
 }
 
-// StartCleanup 启动后台定时清理任务，解决过期 Key 永远不被访问导致的内存泄漏
-func (c *TTLCache[T]) StartCleanup(ctx context.Context, interval time.Duration) {
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				now := time.Now()
-				c.m.Range(func(key, value any) bool {
-					en := value.(entry[T])
-					if now.After(en.expire) {
-						c.m.Delete(key)
-					}
-					return true
-				})
-			}
-		}
-	}()
+func (c *TTLCache[T]) Close() {
+	c.c.Close()
 }
