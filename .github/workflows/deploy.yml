@@ -76,6 +76,8 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           source: "docker-compose.yaml"
           target: "/root/SeaTest"
+          timeout: 60s
+          command_timeout: 2m
 
       - name: Deploy to Server
         uses: appleboy/ssh-action@v1.0.3
@@ -83,6 +85,7 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
+          command_timeout: 15m
           script: |
             cd /root/SeaTest
             export ARTICLE_IMAGE_TAG=${{ github.sha }}
@@ -90,13 +93,23 @@ jobs:
             export ADMIN_IMAGE_TAG=${{ github.sha }}
             export MESSAGE_IMAGE_TAG=${{ github.sha }}
             export SECURITY_IMAGE_TAG=${{ github.sha }}
-            for attempt in 1 2 3; do
-              docker compose pull sea-article sea-user sea-admin sea-message sea-security && break
-              if [ "$attempt" = "3" ]; then
-                echo "docker compose pull failed after 3 attempts" >&2
-                exit 1
-              fi
-              sleep 10
+            
+            echo "Starting sequential pull..."
+            for svc in sea-article sea-user sea-admin sea-message sea-security; do
+              echo "Pulling $svc..."
+              for attempt in 1 2 3; do
+                docker compose pull $svc && break
+                sleep 5
+              done
             done
-            docker compose up -d --force-recreate --remove-orphans sea-article sea-user sea-admin sea-message sea-security
+
+            echo "Starting sequential deploy..."
+            for svc in sea-article sea-user sea-admin sea-message sea-security; do
+              echo "Deploying $svc..."
+              docker compose up -d --force-recreate --remove-orphans $svc
+              # 给服务器留出 CPU 恢复时间
+              sleep 15
+            done
+
+            echo "Cleaning up old images..."
             docker image prune -f
