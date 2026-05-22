@@ -34,6 +34,8 @@ services:
       resources:
         limits:
           memory: 512M
+        reservations:
+          memory: 128M
     ports:
       - "35432:5432"
     environment:

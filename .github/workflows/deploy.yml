@@ -3,7 +3,6 @@ name: Build and Deploy (Article Only)
 on:
   push:
     branches: [ "main" ]
-    # 1. 只有这些路径变动时才运行 CD
     paths:
       - 'service/article/**'
       - 'service/common/**'
@@ -11,14 +10,27 @@ on:
       - 'docker-compose.yaml'
       - '.github/workflows/deploy.yml'
 
+# 核心：防止多个 build 任务完成后同时 SSH 登录服务器导致部署冲突
+concurrency:
+  group: production_deploy
+  cancel-in-progress: true
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    # 2. 简化 Matrix，只保留 article
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      # ... (省略中间的 Docker Login 等步骤) ...
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Build and push Article
         uses: docker/build-push-action@v5
         with:
@@ -33,28 +45,49 @@ jobs:
             BUILD_RPC=1
             API_BUILD_PATH=./service/article/api/
             RPC_BUILD_PATH=./service/article/rpc/
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Copy docker-compose.yaml to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: "docker-compose.yaml"
+          target: "/root/SeaTest"
+          timeout: 60s
+
       - name: Deploy Article Only
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
+          command_timeout: 10m
           script: |
             cd /root/SeaTest
-            # 3. 只更新 article 的 Tag
+            # 仅更新 Article 的 Tag，其他服务保持现状
             export ARTICLE_IMAGE_TAG=${{ github.sha }}
             
-            echo "Quick update for sea-article..."
-            # 4. 只 Pull 和 Up 目标服务
+            echo "Updating sea-article to ${{ github.sha }}..."
+            
+            # 精准拉取和启动
+            # 1. 仅拉取 article 镜像，减少 IO 压力
             docker compose pull sea-article
             
-            # 注意：去掉 --force-recreate，只更新有变动的服务
-            # docker compose up -d 会自动识别 ARTICLE_IMAGE_TAG 的变化并仅重启 sea-article
-            docker compose up -d sea-article
+            # 2. 执行全局 up -d
+            # Docker 会自动识别只有 article 镜像变动，从而仅重启 article
+            # 同时确保其他服务（如果挂了）能被顺便拉起来
+            docker compose up -d
             
+            echo "Cleaning up..."
+            docker image prune -f &
             echo "Article update complete."
