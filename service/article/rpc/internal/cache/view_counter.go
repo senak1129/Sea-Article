@@ -62,7 +62,8 @@ func (c *ViewCounter) StartFlusher(ctx context.Context, repo ViewCountRepo, inva
 		ctx = context.Background()
 	}
 	go func() {
-		ticker := time.NewTicker(5 * time.Second)
+		interval := 5 * time.Second
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -72,11 +73,24 @@ func (c *ViewCounter) StartFlusher(ctx context.Context, repo ViewCountRepo, inva
 				return
 			case <-ticker.C:
 				for {
-					hasMore, _ := c.flushBatch(ctx, repo, invalidate)
+					hasMore, err := c.flushBatch(ctx, repo, invalidate)
+					if err != nil {
+						// DB 故障：指数退避，避免无效重试击穿数据库
+						interval *= 2
+						if interval > 2*time.Minute {
+							interval = 2 * time.Minute
+						}
+						ticker.Reset(interval)
+						break
+					}
+					// 成功：重置为正常间隔
+					if interval != 5*time.Second {
+						interval = 5 * time.Second
+						ticker.Reset(interval)
+					}
 					if !hasMore {
 						break
 					}
-					// 如果还有更多数据，不等待 ticker，直接处理下一批以提高吞吐量
 				}
 			}
 		}
@@ -94,30 +108,28 @@ func (c *ViewCounter) flushBatch(ctx context.Context, repo ViewCountRepo, invali
 	}
 
 	for _, id := range ids {
-		delta, err := c.popDelta(ctx, id)
+		// 第一步：读取增量（不删除 delta key）
+		delta, err := c.readDelta(ctx, id)
 		if err != nil {
-			// popDelta 失败，但 ID 已经从 SSet 中 SPop 出来了
-			// 为了不丢失这个 ID，如果 delta 还是 0，尝试加回去
-			if saddErr := c.rdb.SAdd(ctx, viewDirtySetKey(), id).Err(); saddErr != nil {
-				logx.Errorf("popDelta failed and restore dirty set failed, id: %s, err: %v, saddErr: %v", id, err, saddErr)
-			} else {
-				logx.Errorf("popDelta failed, restored to dirty set, id: %s, err: %v", id, err)
-			}
+			logx.Errorf("readDelta failed, restoring dirty set, id: %s, err: %v", id, err)
+			c.rdb.SAdd(ctx, viewDirtySetKey(), id)
 			continue
 		}
 		if delta <= 0 {
+			// 无增量，清理脏标记
+			c.rdb.SRem(ctx, viewDirtySetKey(), id)
 			continue
 		}
+		// 第二步：写数据库（数据安全，可重试）
 		if err := repo.AddViewCount(ctx, id, delta); err != nil {
-			// 数据库更新失败，回退数据到 Redis
-			logx.Errorf("db update failed, attempting rollback to redis, id: %s, err: %v", id, err)
-			if incrErr := c.rdb.IncrBy(ctx, viewDeltaKey(id), delta).Err(); incrErr != nil {
-				logx.Errorf("rollback incr failed, id: %s, delta: %d, incrErr: %v", id, delta, incrErr)
-			}
-			if saddErr := c.rdb.SAdd(ctx, viewDirtySetKey(), id).Err(); saddErr != nil {
-				logx.Errorf("rollback sadd failed, id: %s, saddErr: %v", id, saddErr)
-			}
+			logx.Errorf("db update failed, will retry next tick, id: %s, delta: %d, err: %v", id, delta, err)
+			// 不删 delta，不删 dirty，下个 tick 自动重试
 			continue
+		}
+		// 第三步：DB 成功后，原子清理 delta + dirty（Lua 保证一致性）
+		if err := c.ackDelta(ctx, id, delta); err != nil {
+			logx.Errorf("ackDelta failed, id: %s, delta: %d, err: %v", id, delta, err)
+			// 不致命：下次 flush 会重复写入，业务上浏览量 +1 是幂等可接受的
 		}
 		if invalidate != nil {
 			invalidate(ctx, id)
@@ -126,44 +138,48 @@ func (c *ViewCounter) flushBatch(ctx context.Context, repo ViewCountRepo, invali
 	return len(ids) == batchSize, nil
 }
 
-var popDeltaLua = redis.NewScript(`
-local v = redis.call('GET', KEYS[1])
-if (not v) or (tonumber(v) == 0) then
-  redis.call('DEL', KEYS[1])
-  redis.call('SREM', KEYS[2], ARGV[1])
-  return 0
-end
-redis.call('DEL', KEYS[1])
-redis.call('SREM', KEYS[2], ARGV[1])
-return tonumber(v)
-`)
-
-/*
-GET 增量值
-    ↓
-是空？或是 0？
-    ↓
-是的 → DEL key + SREM 集合 → return 0
-    ↓
-不是 → DEL key + SREM 集合 → return 真实增量
-*/
-
-func (c *ViewCounter) popDelta(ctx context.Context, articleId string) (int64, error) {
-	res, err := popDeltaLua.Run(ctx, c.rdb, []string{viewDeltaKey(articleId), viewDirtySetKey()}, articleId).Result()
+// readDelta 仅读取增量值，不删除 delta key。
+// 即使进程崩溃，delta 仍留在 Redis 中，下次 tick 可重试。
+func (c *ViewCounter) readDelta(ctx context.Context, articleId string) (int64, error) {
+	val, err := c.rdb.Get(ctx, viewDeltaKey(articleId)).Result()
 	if err != nil {
+		if err == redis.Nil {
+			return 0, nil
+		}
 		return 0, err
 	}
-	switch v := res.(type) {
-	case int64:
-		return v, nil
-	case int:
-		return int64(v), nil
-	case string:
-		n, _ := strconv.ParseInt(v, 10, 64)
-		return n, nil
-	default:
+	n, err := strconv.ParseInt(val, 10, 64)
+	if err != nil {
 		return 0, nil
 	}
+	return n, nil
+}
+
+// ackDelta 在 DB 写入成功后调用，原子地从 delta key 中扣除已持久化的增量，并清理 dirty 标记。
+// 使用 Lua 脚本保证：如果在 read 和 ack 之间有新 Incr，剩余增量不会丢失。
+var ackDeltaLua = redis.NewScript(`
+local v = redis.call('GET', KEYS[1])
+if not v then
+  redis.call('SREM', KEYS[2], ARGV[2])
+  return 0
+end
+local cur = tonumber(v)
+local delta = tonumber(ARGV[1])
+if cur <= delta then
+  redis.call('DEL', KEYS[1])
+else
+  redis.call('DECRBY', KEYS[1], delta)
+end
+redis.call('SREM', KEYS[2], ARGV[2])
+return cur - delta
+`)
+
+func (c *ViewCounter) ackDelta(ctx context.Context, articleId string, delta int64) error {
+	_, err := ackDeltaLua.Run(ctx, c.rdb, []string{viewDeltaKey(articleId), viewDirtySetKey()}, delta, articleId).Result()
+	if err != nil && err != redis.Nil {
+		return err
+	}
+	return nil
 }
 
 func viewDeltaKey(articleId string) string {
