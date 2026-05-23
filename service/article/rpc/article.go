@@ -137,11 +137,7 @@ func (s *articleCacheWorkersService) Start() {
 	s.cancel = cancel
 
 	if s.svcCtx.ViewCounter != nil {
-		s.svcCtx.ViewCounter.StartFlusher(workerCtx, s.svcCtx.ArticleRepo, func(ctx context.Context, id string) {
-			if s.svcCtx.ArticleCache != nil {
-				s.svcCtx.ArticleCache.DelDetail(ctx, id)
-			}
-		})
+		s.svcCtx.ViewCounter.StartFlusher(workerCtx, s.svcCtx.ArticleRepo, nil)
 	}
 }
 
