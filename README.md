@@ -27,7 +27,7 @@
 
 ## 项目背景
 
-这个项目源于一个我曾深度参与的开源微服务社区项目 Sea-RideTheWind（https://github.com/Sea-Go/Sea-RideTheWind)。在该项目中，我负责 **Article 服务** 的整体架构设计与核心功能实现——从数据建模、API 设计到消息队列集成、缓存策略落地。
+这个项目源于一个我曾深度参与的开源微服务社区项目 [Sea-RideTheWind](https://github.com/Sea-Go/Sea-RideTheWind)。在该项目中，我负责 **Article 服务** 的整体架构设计与核心功能实现——从数据建模、API 设计到消息队列集成、缓存策略落地。
 
 2026 年 5月，原组织项目停止维护。我将自己负责的文章服务代码完整剥离，独立 fork 至本仓库，进行了以下重构工作：
 
