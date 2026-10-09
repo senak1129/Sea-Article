@@ -23,7 +23,8 @@ const server = http.createServer((req, res) => {
   if (hit) {
     const targetPath = (hit.strip ? req.url.replace(hit.strip, '') : req.url);
     const u = new URL(targetPath, hit.target);
-    const proxyReq = http.request(u, { method: req.method, headers: req.headers }, (proxyRes) => {
+    const fwdHeaders = { ...req.headers, host: u.host }; // 预签名 URL 按目标 host 签名，必须改回
+    const proxyReq = http.request(u, { method: req.method, headers: fwdHeaders }, (proxyRes) => {
       res.writeHead(proxyRes.statusCode, { ...cors, 'Content-Type': proxyRes.headers['content-type'] || 'application/json' });
       proxyRes.pipe(res);
     });
