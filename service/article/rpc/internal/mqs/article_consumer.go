@@ -128,6 +128,42 @@ func (l *ArticleConsumer) Consume(ctx context.Context, key, val string) error {
 	}
 
 	logger.LogInfo(ctx, "article published (dev: review passed, auto reco done)", logger.WithArticleID(msg.ArticleID), logger.WithUserID(msg.AuthorID))
+
+	// ===== 以下为生产环境原始逻辑：审核通过后落 article_sync outbox，等下游推荐/搜索系统确认后回写状态 =====
+	// 开发环境默认推荐完毕，故暂不执行，切回生产时取消注释即可。
+	/*
+	// 幂等标记：真正的 PUBLISHED 状态由下游确认，这里用 ExtInfo 做防重
+	if article.ExtInfo[ExtPublishStage] == "reco_queued" {
+		logger.LogInfo(ctx, "article review skipped: already reco_queued", logger.WithArticleID(msg.ArticleID))
+		return nil
+	}
+
+	deterministicEventKey := ArticleSyncEventKey(msg.ArticleID, ArticleSyncOpUpsert, "review_passed")
+
+	event := NewArticleSyncEvent(article, articleContent, ArticleSyncOpUpsert, syncReason, eventID, versionMs)
+	outbox := &model.ArticleSyncOutboxEvent{
+		EventID:     event.EventID,
+		EventKey:    deterministicEventKey,
+		EventType:   ArticleOutboxEventTypeSync,
+		AggregateID: event.ArticleID,
+		Payload:     MustMarshalSyncEvent(event),
+		Status:      model.ArticleSyncOutboxStatusPending,
+	}
+
+	SetSyncState(article, "reco_queued", "pending", syncReason, eventID, versionMs, "")
+	if err := l.svcCtx.ArticleRepo.RunInTx(ctx, func(tx *gorm.DB) error {
+		if err := l.svcCtx.ArticleRepo.UpdateExtInfoTx(ctx, tx, article.ID, article.ExtInfo); err != nil {
+			return err
+		}
+		return l.svcCtx.ArticleSyncOutbox.CreateTx(ctx, tx, outbox)
+	}); err != nil {
+		logger.LogBusinessErr(ctx, errmsg.ErrorDbUpdate, fmt.Errorf("persist article sync outbox failed: %w", err), logger.WithArticleID(msg.ArticleID), logger.WithUserID(msg.AuthorID))
+		return err
+	}
+
+	logger.LogInfo(ctx, "article sync event queued", logger.WithArticleID(msg.ArticleID), logger.WithUserID(msg.AuthorID))
+	*/
+
 	return nil
 }
 
