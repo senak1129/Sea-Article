@@ -213,15 +213,18 @@ async function openDetail(id){
       '<div style="margin:14px 0;"><button class="danger" onclick="doDelete(\''+a.id+'\')">删除文章</button></div>'+
       '<div id="contentArea" class="meta">正文加载中…</div>';
     $('detailBox').innerHTML = html;
-    // content 是 MinIO 里的 objectName，直接拉取公开地址
+    // content 可能是 MinIO objectName（articles/...），也可能直接是正文文本
     try {
-      if(!a.content){ throw new Error('empty'); }
-      var r = await fetch(MINIO_BASE + '/' + a.content);
-      if(!r.ok){ throw new Error('http ' + r.status); }
-      var text = await r.text();
-      $('contentArea').innerHTML = '<pre>'+esc(text)+'</pre>';
+      var c = a.content || '';
+      if(!c){ throw new Error('empty'); }
+      if(c.indexOf('articles/') === 0){
+        var r = await fetch(MINIO_BASE + '/' + c);
+        if(!r.ok){ throw new Error('http ' + r.status); }
+        c = await r.text();
+      }
+      $('contentArea').innerHTML = '<pre>'+esc(c)+'</pre>';
     } catch(e2){
-      $('contentArea').innerHTML = '<div class="meta">正文不存在或尚未上传（content='+esc(a.content)+'）</div>';
+      $('contentArea').innerHTML = '<div class="meta">正文不存在或尚未上传</div>';
     }
   } catch(e){ msg('加载详情失败：'+e.message); }
 }
