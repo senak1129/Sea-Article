@@ -184,8 +184,9 @@ async function loadList(p){
     $('pageNum').textContent = page;
     $('totalNum').textContent = data.total || 0;
     var box = $('listBox');
-    if(!data.articles || !data.articles.length){ box.innerHTML = '<div class="meta">暂无文章</div>'; return; }
-    box.innerHTML = data.articles.map(function(a){
+    var items = (data.articles || []).filter(function(a){ return a.status === 2; }); // 仅已发布
+    if(!items.length){ box.innerHTML = '<div class="meta">暂无已发布文章</div>'; return; }
+    box.innerHTML = items.map(function(a){
       var time = a.create_time ? new Date(a.create_time*1000).toLocaleString() : '';
       return '<div class="art" onclick="openDetail(\''+a.id+'\')">'+
         '<h3>'+esc(a.title)+'</h3>'+
@@ -214,11 +215,13 @@ async function openDetail(id){
     $('detailBox').innerHTML = html;
     // content 是 MinIO 里的 objectName，直接拉取公开地址
     try {
+      if(!a.content){ throw new Error('empty'); }
       var r = await fetch(MINIO_BASE + '/' + a.content);
+      if(!r.ok){ throw new Error('http ' + r.status); }
       var text = await r.text();
       $('contentArea').innerHTML = '<pre>'+esc(text)+'</pre>';
     } catch(e2){
-      $('contentArea').innerHTML = '<pre>'+esc(a.content)+'\n\n（正文拉取失败：'+e2.message+'）</pre>';
+      $('contentArea').innerHTML = '<div class="meta">正文不存在或尚未上传（content='+esc(a.content)+'）</div>';
     }
   } catch(e){ msg('加载详情失败：'+e.message); }
 }
@@ -242,7 +245,8 @@ async function doPublish(){
     var up = await api('/article/upload/url?file_name=article.md&content_type=text/markdown');
     // 预签名 URL 指向 MinIO 地址，改走本地代理，避免浏览器跨域
     var putUrl = up.upload_url.replace(/^https?:\/\/[^/]+/, '/minio');
-    await fetch(putUrl, {method:'PUT', body: content});
+    var putRes = await fetch(putUrl, {method:'PUT', body: content});
+    if(!putRes.ok) throw new Error('正文上传到 MinIO 失败 HTTP ' + putRes.status);
     // 3. 创建文章，content_path 用 objectName
     var tags = $('fTags').value.split(',').map(function(s){return s.trim();}).filter(Boolean);
     await api('/article', {method:'POST', body: JSON.stringify({
