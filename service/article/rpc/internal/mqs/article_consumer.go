@@ -127,12 +127,6 @@ func (l *ArticleConsumer) Consume(ctx context.Context, key, val string) error {
 		return err
 	}
 
-	// 发布状态变更后失效缓存，列表立即可见
-	if l.svcCtx.ArticleCache != nil {
-		l.svcCtx.ArticleCache.DelDetail(ctx, article.ID)
-		l.svcCtx.ArticleCache.InvalidateLists(ctx)
-	}
-
 	logger.LogInfo(ctx, "article published (dev: review passed, auto reco done)", logger.WithArticleID(msg.ArticleID), logger.WithUserID(msg.AuthorID))
 	return nil
 }

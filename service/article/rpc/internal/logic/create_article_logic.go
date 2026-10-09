@@ -151,10 +151,5 @@ func (l *CreateArticleLogic) CreateArticle(in *__.CreateArticleRequest) (*__.Cre
 	metrics.ArticleTotal.WithLabelValues("create").Inc()
 	metrics.ArticleStatusTotal.WithLabelValues("reviewing").Inc()
 
-	// 新建文章后清空列表缓存，让新文章立即可见
-	if l.svcCtx.ArticleCache != nil {
-		l.svcCtx.ArticleCache.InvalidateLists(ctx)
-	}
-
 	return &__.CreateArticleResponse{ArticleId: articleID}, nil
 }

@@ -122,7 +122,6 @@ func (l *DeleteArticleLogic) DeleteArticle(in *__.DeleteArticleRequest) (*__.Del
 	// 失效缓存
 	if l.svcCtx.ArticleCache != nil {
 		l.svcCtx.ArticleCache.DelDetail(spanCtx, in.ArticleId)
-		l.svcCtx.ArticleCache.InvalidateLists(spanCtx)
 	}
 
 	return &__.DeleteArticleResponse{Success: true}, nil
