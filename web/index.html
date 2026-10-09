@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sea-Article 简易前端</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --border: #e5e7eb;
+    --text: #1f2937; --muted: #6b7280; --primary: #2563eb;
+    --danger: #dc2626; --ok: #059669;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+         background: var(--bg); color: var(--text); font-size: 15px; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 20px 16px 60px; }
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+  header h1 { font-size: 20px; margin: 0; }
+  button { cursor: pointer; border: 1px solid var(--border); background: #fff;
+           padding: 7px 14px; border-radius: 6px; font-size: 14px; }
+  button.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+  button.danger { background: #fff; color: var(--danger); border-color: var(--danger); }
+  button:hover { opacity: .88; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+          padding: 18px; margin-bottom: 14px; }
+  input, textarea, select { width: 100%; padding: 9px 10px; border: 1px solid var(--border);
+          border-radius: 6px; font-size: 14px; font-family: inherit; margin-top: 6px; }
+  textarea { min-height: 220px; resize: vertical; }
+  label { font-size: 13px; color: var(--muted); }
+  .row { margin-bottom: 12px; }
+  .hidden { display: none !important; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+  .tabs button.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+  .msg { padding: 10px 12px; border-radius: 6px; margin-bottom: 12px; font-size: 14px; }
+  .msg.err { background: #fef2f2; color: var(--danger); }
+  .msg.ok { background: #ecfdf5; color: var(--ok); }
+  .art { border-bottom: 1px solid var(--border); padding: 14px 0; cursor: pointer; }
+  .art:last-child { border-bottom: none; }
+  .art h3 { margin: 0 0 6px; font-size: 16px; }
+  .art .meta { font-size: 12.5px; color: var(--muted); }
+  .art .brief { margin: 6px 0 0; color: #374151; font-size: 14px; }
+  .toolbar { display: flex; justify-content: space-between; align-items: center; margin: 10px 0; }
+  pre { background: #0f172a; color: #e2e8f0; padding: 14px; border-radius: 8px;
+        white-space: pre-wrap; word-break: break-word; font-size: 13.5px; }
+  .badge { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 10px;
+           background: #eff6ff; color: var(--primary); margin-right: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Sea-Article</h1>
+    <div id="userBox"></div>
+  </header>
+  <div id="msgBox"></div>
+
+  <!-- 登录 -->
+  <div id="loginView" class="card" style="max-width:380px;margin:40px auto;">
+    <h2 style="margin-top:0;font-size:18px;">登录 / 注册</h2>
+    <div class="row"><label>用户名</label><input id="loginUser"></div>
+    <div class="row"><label>密码</label><input id="loginPass" type="password"></div>
+    <div style="display:flex;gap:8px;">
+      <button class="primary" onclick="doLogin()">登录</button>
+      <button onclick="doRegister()">注册</button>
+    </div>
+  </div>
+
+  <!-- 主界面 -->
+  <div id="mainView" class="hidden">
+    <div class="tabs">
+      <button id="tabList" class="active" onclick="showTab('list')">文章列表</button>
+      <button id="tabNew" onclick="showTab('new')">写文章</button>
+    </div>
+
+    <div id="listPane">
+      <div class="toolbar">
+        <div>共 <b id="totalNum">0</b> 篇</div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button onclick="loadList(page-1)">上一页</button>
+          <span id="pageNum">1</span>
+          <button onclick="loadList(page+1)">下一页</button>
+        </div>
+      </div>
+      <div class="card" id="listBox"><div class="meta">加载中…</div></div>
+    </div>
+
+    <div id="newPane" class="hidden">
+      <div class="card">
+        <h2 style="margin-top:0;font-size:18px;">发布文章</h2>
+        <div class="row"><label>标题 *</label><input id="fTitle"></div>
+        <div class="row"><label>摘要</label><input id="fBrief"></div>
+        <div class="row"><label>分类标签 manual_type_tag</label><input id="fTag" placeholder="如：tech"></div>
+        <div class="row"><label>二级标签（逗号分隔）</label><input id="fTags" placeholder="如：go,微服务"></div>
+        <div class="row"><label>正文（Markdown 文本）*</label><textarea id="fContent" placeholder="# 正文"></textarea></div>
+        <button class="primary" onclick="doPublish()">发布</button>
+      </div>
+    </div>
+
+    <div id="detailPane" class="hidden">
+      <button onclick="showTab('list')">← 返回列表</button>
+      <div class="card" id="detailBox"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ====== 接口地址：全部走本地 dev-server 同源代理，无需改 ======
+var ARTICLE_API = '/v1';
+var USER_API     = '/usercenter/v1';
+var MINIO_BASE   = '/minio/articles'; // 经代理访问 MinIO bucket
+// ============================================================
+
+var token = localStorage.getItem('sa_token') || '';
+var page = 1;
+
+function $(id){ return document.getElementById(id); }
+function msg(t, ok){
+  $('msgBox').innerHTML = t ? '<div class="msg '+(ok?'ok':'err')+'">'+t+'</div>' : '';
+  if(t) setTimeout(function(){ $('msgBox').innerHTML=''; }, 3500);
+}
+function authHeader(){ return { 'Authorization': 'Bearer '+token, 'Content-Type': 'application/json' }; }
+
+async function api(path, opts){
+  opts = opts || {};
+  opts.headers = Object.assign(opts.headers || {}, authHeader());
+  var res = await fetch(ARTICLE_API + path, opts);
+  var body = await res.json();
+  if(body.code !== 200) throw new Error(body.msg || ('code='+body.code));
+  return body.data;
+}
+
+async function doLogin(){
+  try {
+    var res = await fetch(USER_API + '/user/login', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({username: $('loginUser').value, password: $('loginPass').value})
+    });
+    var body = await res.json();
+    if(body.code !== 200) throw new Error(body.msg);
+    token = body.data.token;
+    localStorage.setItem('sa_token', token);
+    enterMain();
+  } catch(e){ msg('登录失败：'+e.message); }
+}
+
+async function doRegister(){
+  try {
+    var res = await fetch(USER_API + '/user/register', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({username: $('loginUser').value, password: $('loginPass').value, email: $('loginUser').value + '@test.com'})
+    });
+    var body = await res.json();
+    if(body.code !== 200) throw new Error(body.msg);
+    msg('注册成功，请登录', true);
+  } catch(e){ msg('注册失败：'+e.message); }
+}
+
+function logout(){
+  token=''; localStorage.removeItem('sa_token');
+  location.reload();
+}
+
+function enterMain(){
+  $('loginView').classList.add('hidden');
+  $('mainView').classList.remove('hidden');
+  $('userBox').innerHTML = '<button onclick="logout()">退出登录</button>';
+  loadList(1);
+}
+
+function showTab(t){
+  ['list','new','detail'].forEach(function(k){
+    $(k+'Pane').classList.add('hidden');
+    var tb = $('tab'+k[0].toUpperCase()+k.slice(1));
+    if(tb) tb.classList.toggle('active', k===t);
+  });
+  $(t+'Pane').classList.remove('hidden');
+  if(t==='list') loadList(page);
+}
+
+async function loadList(p){
+  try {
+    var data = await api('/articles?page='+p+'&page_size=10');
+    page = data.page || 1;
+    $('pageNum').textContent = page;
+    $('totalNum').textContent = data.total || 0;
+    var box = $('listBox');
+    if(!data.articles || !data.articles.length){ box.innerHTML = '<div class="meta">暂无文章</div>'; return; }
+    box.innerHTML = data.articles.map(function(a){
+      var time = a.create_time ? new Date(a.create_time*1000).toLocaleString() : '';
+      return '<div class="art" onclick="openDetail(\''+a.id+'\')">'+
+        '<h3>'+esc(a.title)+'</h3>'+
+        '<div class="meta">'+esc(a.author_name||a.author_id||'')+' · '+time+
+        (a.manual_type_tag ? ' · <span class="badge">'+esc(a.manual_type_tag)+'</span>' : '')+
+        '</div>'+
+        (a.brief ? '<p class="brief">'+esc(a.brief)+'</p>' : '')+
+        '</div>';
+    }).join('');
+  } catch(e){ msg('加载列表失败：'+e.message); }
+}
+
+async function openDetail(id){
+  try {
+    var d = await api('/article/'+id+'?incr_view=false');
+    var a = d.article;
+    var time = a.create_time ? new Date(a.create_time*1000).toLocaleString() : '';
+    $('detailPane').classList.remove('hidden');
+    $('listPane').classList.add('hidden');
+    $('newPane').classList.add('hidden');
+    var html = '<h2 style="margin-top:0;">'+esc(a.title)+'</h2>'+
+      '<div class="meta">'+esc(a.author_name||'')+' · '+time+' · 状态 '+a.status+'</div>'+
+      (a.brief ? '<p>'+esc(a.brief)+'</p>' : '')+
+      '<div style="margin:14px 0;"><button class="danger" onclick="doDelete(\''+a.id+'\')">删除文章</button></div>'+
+      '<div id="contentArea" class="meta">正文加载中…</div>';
+    $('detailBox').innerHTML = html;
+    // content 是 MinIO 里的 objectName，直接拉取公开地址
+    try {
+      var r = await fetch(MINIO_BASE + '/' + a.content);
+      var text = await r.text();
+      $('contentArea').innerHTML = '<pre>'+esc(text)+'</pre>';
+    } catch(e2){
+      $('contentArea').innerHTML = '<pre>'+esc(a.content)+'\n\n（正文拉取失败：'+e2.message+'）</pre>';
+    }
+  } catch(e){ msg('加载详情失败：'+e.message); }
+}
+
+async function doDelete(id){
+  if(!confirm('确认删除这篇文章？')) return;
+  try {
+    await api('/article/'+id, {method:'DELETE'});
+    msg('已删除', true);
+    showTab('list');
+  } catch(e){ msg('删除失败：'+e.message); }
+}
+
+async function doPublish(){
+  var title = $('fTitle').value.trim();
+  var content = $('fContent').value;
+  if(!title || !content.trim()){ msg('标题和正文必填'); return; }
+  try {
+    msg('第 1 步：申请上传地址…');
+    // 1. 申请预签名 PUT 地址
+    var up = await api('/article/upload/url?file_name=article.md&content_type=text/markdown');
+    // 预签名 URL 指向 MinIO 地址，改走本地代理，避免浏览器跨域
+    var putUrl = up.upload_url.replace(/^https?:\/\/[^/]+/, '/minio');
+    await fetch(putUrl, {method:'PUT', body: content});
+    // 3. 创建文章，content_path 用 objectName
+    var tags = $('fTags').value.split(',').map(function(s){return s.trim();}).filter(Boolean);
+    await api('/article', {method:'POST', body: JSON.stringify({
+      title: title,
+      brief: $('fBrief').value.trim(),
+      content_path: up.object_name,
+      cover_image_url: '',
+      manual_type_tag: $('fTag').value.trim(),
+      secondary_tags: tags
+    })});
+    msg('发布成功！', true);
+    $('fTitle').value=''; $('fBrief').value=''; $('fContent').value='';
+    showTab('list');
+  } catch(e){ msg('发布失败：'+e.message); }
+}
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];
+}); }
+
+if(token) enterMain();
+</script>
+</body>
+</html>
