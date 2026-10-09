@@ -18,7 +18,6 @@ import (
 
 	"github.com/minio/minio-go/v7"
 	"github.com/zeromicro/go-zero/core/logx"
-	"gorm.io/gorm"
 )
 
 type ArticleConsumer struct {
@@ -102,14 +101,13 @@ func (l *ArticleConsumer) Consume(ctx context.Context, key, val string) error {
 		return nil
 	}
 
-	// 策略2: 核心状态机 (如果审核通过，为了防止重复投递，必须有幂等标记)
-	// 由于真正的 "已发布(PUBLISHED)" 状态可能需要推荐系统等下游确认，
-	// 这里不直接修改 Status，而是通过修改 ExtInfo 里的 PublishStage 来做幂等标记。
-	if article.ExtInfo[ExtPublishStage] == "reco_queued" {
-		logger.LogInfo(ctx, "article review skipped: already reco_queued", logger.WithArticleID(msg.ArticleID))
+	// 幂等：已是已发布终态直接跳过
+	if article.Status == int32(pb.ArticleStatus_PUBLISHED) {
 		return nil
 	}
 
+	// 开发环境：审核通过即视为推荐完成，直接置为 PUBLISHED。
+	// 生产环境这里应落 article_sync outbox，由下游推荐/搜索系统确认后回写状态。
 	syncReason := strings.TrimSpace(article.ExtInfo[ExtPendingSyncReason])
 	if syncReason == "" {
 		syncReason = ArticleSyncReasonCreate
@@ -122,32 +120,20 @@ func (l *ArticleConsumer) Consume(ctx context.Context, key, val string) error {
 	}
 	versionMs := time.Now().UnixMilli()
 
-	// 策略3: 状态流转与确定性凭证 (使用业务确定的 EventKey 配合 DB 唯一索引兜底去重)
-
-	deterministicEventKey := ArticleSyncEventKey(msg.ArticleID, ArticleSyncOpUpsert, "review_passed")
-
-	event := NewArticleSyncEvent(article, articleContent, ArticleSyncOpUpsert, syncReason, eventID, versionMs)
-	outbox := &model.ArticleSyncOutboxEvent{
-		EventID:     event.EventID,
-		EventKey:    deterministicEventKey,
-		EventType:   ArticleOutboxEventTypeSync,
-		AggregateID: event.ArticleID,
-		Payload:     MustMarshalSyncEvent(event),
-		Status:      model.ArticleSyncOutboxStatusPending,
-	}
-
-	SetSyncState(article, "reco_queued", "pending", syncReason, eventID, versionMs, "")
-	if err := l.svcCtx.ArticleRepo.RunInTx(ctx, func(tx *gorm.DB) error {
-		if err := l.svcCtx.ArticleRepo.UpdateExtInfoTx(ctx, tx, article.ID, article.ExtInfo); err != nil {
-			return err
-		}
-		return l.svcCtx.ArticleSyncOutbox.CreateTx(ctx, tx, outbox)
-	}); err != nil {
-		logger.LogBusinessErr(ctx, errmsg.ErrorDbUpdate, fmt.Errorf("persist article sync outbox failed: %w", err), logger.WithArticleID(msg.ArticleID), logger.WithUserID(msg.AuthorID))
+	article.Status = int32(pb.ArticleStatus_PUBLISHED)
+	SetSyncState(article, "published", "done", syncReason, eventID, versionMs, "")
+	if err := l.svcCtx.ArticleRepo.UpdateStatusAndExtInfo(ctx, article.ID, article.Status, article.ExtInfo); err != nil {
+		logger.LogBusinessErr(ctx, errmsg.ErrorDbUpdate, fmt.Errorf("publish article failed: %w", err), logger.WithArticleID(msg.ArticleID), logger.WithUserID(msg.AuthorID))
 		return err
 	}
 
-	logger.LogInfo(ctx, "article sync event queued", logger.WithArticleID(msg.ArticleID), logger.WithUserID(msg.AuthorID))
+	// 发布状态变更后失效缓存，列表立即可见
+	if l.svcCtx.ArticleCache != nil {
+		l.svcCtx.ArticleCache.DelDetail(ctx, article.ID)
+		l.svcCtx.ArticleCache.InvalidateLists(ctx)
+	}
+
+	logger.LogInfo(ctx, "article published (dev: review passed, auto reco done)", logger.WithArticleID(msg.ArticleID), logger.WithUserID(msg.AuthorID))
 	return nil
 }
 

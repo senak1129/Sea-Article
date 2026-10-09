@@ -185,6 +185,31 @@ func (c *ArticleCache) DelList(ctx context.Context, in *pb.ListArticlesRequest) 
 	}
 }
 
+// InvalidateLists 清空所有列表缓存（新建/删除/发布状态变更后调用，避免用户看到旧列表）。
+func (c *ArticleCache) InvalidateLists(ctx context.Context) {
+	if c == nil || c.rdb == nil {
+		return
+	}
+	var cursor uint64
+	for {
+		keys, next, err := c.rdb.Scan(ctx, cursor, "article:list:*", 500).Result()
+		if err != nil {
+			logx.Errorf("scan list cache keys failed: %v", err)
+			return
+		}
+		if len(keys) > 0 {
+			if err := c.rdb.Del(ctx, keys...).Err(); err != nil {
+				logx.Errorf("del list cache keys failed: %v", err)
+			}
+		}
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+	c.localList.Clear()
+}
+
 func (c *ArticleCache) GetOrLoadDetail(ctx context.Context, id string, ttl time.Duration, loader func() (*pb.Article, error)) (*pb.Article, error) {
 	if v, err := c.GetDetail(ctx, id); err == nil && v != nil {
 		return v, nil
