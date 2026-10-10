@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Sea-Article 简易前端</title>
+<link href="https://cdn.jsdelivr.net/npm/quill@2/dist/quill.snow.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/quill@2/dist/quill.js"></script>
 <style>
   :root {
     --bg: #f6f7f9; --card: #ffffff; --border: #e5e7eb;
@@ -42,6 +44,13 @@
   .toolbar { display: flex; justify-content: space-between; align-items: center; margin: 10px 0; }
   pre { background: #0f172a; color: #e2e8f0; padding: 14px; border-radius: 8px;
         white-space: pre-wrap; word-break: break-word; font-size: 13.5px; }
+  .q-editor { min-height: 320px; }
+  .ql-container { font-size: 15px; }
+  .article-body img { max-width: 100%; border-radius: 8px; }
+  .article-body blockquote { border-left: 3px solid var(--border); margin: 10px 0; padding: 4px 14px; color: var(--muted); background: #f9fafb; }
+  .article-body pre { background: #0f172a; color: #e2e8f0; padding: 12px; border-radius: 8px; overflow-x: auto; }
+  .article-body code { background: #f1f5f9; padding: 2px 5px; border-radius: 4px; font-size: 13px; }
+  .article-body pre code { background: transparent; padding: 0; }
   .badge { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 10px;
            background: #eff6ff; color: var(--primary); margin-right: 6px; }
 </style>
@@ -91,7 +100,7 @@
         <div class="row"><label>摘要</label><input id="fBrief"></div>
         <div class="row"><label>分类标签 manual_type_tag</label><input id="fTag" placeholder="如：tech"></div>
         <div class="row"><label>二级标签（逗号分隔）</label><input id="fTags" placeholder="如：go,微服务"></div>
-        <div class="row"><label>正文（Markdown 文本）*</label><textarea id="fContent" placeholder="# 正文"></textarea></div>
+        <div class="row"><label>正文 *</label><div id="editor" class="q-editor"></div></div>
         <button class="primary" onclick="doPublish()">发布</button>
       </div>
     </div>
@@ -112,6 +121,14 @@ var MINIO_BASE   = '/minio/articles'; // 经代理访问 MinIO bucket
 
 var token = localStorage.getItem('sa_token') || '';
 var page = 1;
+var quill = null;
+function ensureEditor(){
+  if(quill || typeof Quill === 'undefined') return;
+  quill = new Quill('#editor', {
+    theme: 'snow',
+    placeholder: '输入正文，支持加粗、标题、列表、引用、代码块、图片…'
+  });
+}
 
 function $(id){ return document.getElementById(id); }
 function msg(t, ok){
@@ -174,6 +191,7 @@ function showTab(t){
     if(tb) tb.classList.toggle('active', k===t);
   });
   $(t+'Pane').classList.remove('hidden');
+  if(t==='new') ensureEditor();
   if(t==='list') loadList(page);
 }
 
@@ -213,7 +231,7 @@ async function openDetail(id){
       '<div style="margin:14px 0;"><button class="danger" onclick="doDelete(\''+a.id+'\')">删除文章</button></div>'+
       '<div id="contentArea" class="meta">正文加载中…</div>';
     $('detailBox').innerHTML = html;
-    // content 可能是 MinIO objectName（articles/...），也可能直接是正文文本
+    // content 可能是 MinIO objectName（articles/...），也可能直接是正文
     try {
       var c = a.content || '';
       if(!c){ throw new Error('empty'); }
@@ -222,7 +240,12 @@ async function openDetail(id){
         if(!r.ok){ throw new Error('http ' + r.status); }
         c = await r.text();
       }
-      $('contentArea').innerHTML = '<pre>'+esc(c)+'</pre>';
+      // 富文本内容以 HTML 标签开头，按 HTML 渲染；纯文本按代码块显示
+      if(/^\s*</.test(c)){
+        $('contentArea').innerHTML = '<div class="article-body">'+c+'</div>';
+      } else {
+        $('contentArea').innerHTML = '<pre>'+esc(c)+'</pre>';
+      }
     } catch(e2){
       $('contentArea').innerHTML = '<div class="meta">正文不存在或尚未上传</div>';
     }
@@ -240,12 +263,14 @@ async function doDelete(id){
 
 async function doPublish(){
   var title = $('fTitle').value.trim();
-  var content = $('fContent').value;
-  if(!title || !content.trim()){ msg('标题和正文必填'); return; }
+  ensureEditor();
+  var content = quill ? quill.root.innerHTML : '';
+  var plain = quill ? quill.getText().trim() : '';
+  if(!title || !plain){ msg('标题和正文必填'); return; }
   try {
     msg('第 1 步：申请上传地址…');
-    // 1. 申请预签名 PUT 地址
-    var up = await api('/article/upload/url?file_name=article.md&content_type=text/markdown');
+    // 1. 申请预签名 PUT 地址（富文本为 HTML）
+    var up = await api('/article/upload/url?file_name=article.html&content_type=text/html');
     // 预签名 URL 指向 MinIO 地址，改走本地代理，避免浏览器跨域
     var putUrl = up.upload_url.replace(/^https?:\/\/[^/]+/, '/minio');
     var putRes = await fetch(putUrl, {method:'PUT', body: content});
@@ -261,7 +286,8 @@ async function doPublish(){
       secondary_tags: tags
     })});
     msg('发布成功！', true);
-    $('fTitle').value=''; $('fBrief').value=''; $('fContent').value='';
+    $('fTitle').value=''; $('fBrief').value='';
+    if(quill) quill.setText('');
     showTab('list');
   } catch(e){ msg('发布失败：'+e.message); }
 }
