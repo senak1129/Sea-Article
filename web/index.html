@@ -131,22 +131,20 @@ function ensureEditor(){
   bindImageUpload(quill);
 }
 
-// 把图片文件单独上传到 MinIO（走 POST /v1/upload），返回可访问的 URL。
-// 这样粘贴的图片以 images/{id}.png 独立存储，而不是 base64 内嵌进正文 HTML。
+// 图片直传：先申请预签名 PUT 地址，再直接上传到 MinIO。
+// 这样图片不经过 article-api / gRPC 中转，绕开内存放大与 gRPC 默认 4MB 上限。
 async function uploadImageFile(file){
-  var fd = new FormData();
-  fd.append('image', file, file.name || ('pasted-' + Date.now() + '.png')); // 字段名必须为 image
-  var res = await fetch(ARTICLE_API + '/upload', {
-    method: 'POST',
-    headers: { 'Authorization': 'Bearer ' + token }, // 不要手写 Content-Type，交给浏览器带 boundary
-    body: fd
-  });
-  var body = await res.json();
-  // 注意：/upload 返回体是裸的 { image_url }，未包 { code, msg, data }
-  var url = body.image_url || (body.data && body.data.image_url);
-  if(!url) throw new Error(body.msg || '图片上传失败');
-  // 本地开发时后端返回 127.0.0.1:39000，改写走 /minio 代理
-  return url.replace(/^https?:\/\/[^/]+/, '/minio');
+  var name = file.name || ('pasted-' + Date.now() + '.png');
+  var type = file.type || 'image/png';
+  // 1) 申请预签名地址（后端按 content_type 归入 images/ 前缀）
+  var up = await api('/article/upload/url?file_name=' + encodeURIComponent(name) +
+                     '&content_type=' + encodeURIComponent(type));
+  // 2) 直传 MinIO（预签名按目标 host 签名，改走本地代理避免跨域）
+  var putUrl = up.upload_url.replace(/^https?:\/\/[^/]+/, '/minio');
+  var res = await fetch(putUrl, { method: 'PUT', body: file }); // 不要手写 Content-Type
+  if(!res.ok) throw new Error('图片上传到 MinIO 失败 HTTP ' + res.status);
+  // 3) 返回可直接访问的读地址（object_name 形如 articles/images/xxx.png）
+  return MINIO_BASE + '/' + up.object_name;
 }
 
 function insertImageFile(file){

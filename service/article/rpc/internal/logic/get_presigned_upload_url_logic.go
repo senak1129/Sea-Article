@@ -3,8 +3,9 @@ package logic
 import (
 	"context"
 	"fmt"
-	"time"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"sea-try-go/service/article/rpc/internal/svc"
 	__ "sea-try-go/service/article/rpc/pb"
@@ -45,7 +46,14 @@ func (l *GetPresignedUploadUrlLogic) GetPresignedUploadUrl(in *__.GetPresignedUp
 		}
 	}
 
-	objectName := fmt.Sprintf("%s%d%s", l.svcCtx.Config.MinIO.ArticlePath, idInt, ext)
+	// 按内容类型归入不同前缀：图片走 ImagePath，其余（正文等）走 ArticlePath。
+	// 这样复用同一个预签名接口即可让图片落到 images/ 下，与正文 content/ 分离。
+	prefix := l.svcCtx.Config.MinIO.ArticlePath
+	if strings.HasPrefix(in.ContentType, "image/") {
+		prefix = l.svcCtx.Config.MinIO.ImagePath
+	}
+
+	objectName := fmt.Sprintf("%s%d%s", prefix, idInt, ext)
 	expiry := time.Minute * 10
 
 	presignedURL, err := l.svcCtx.MinioClient.PresignedPutObject(
