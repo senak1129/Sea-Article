@@ -128,6 +128,65 @@ function ensureEditor(){
     theme: 'snow',
     placeholder: '输入正文，支持加粗、标题、列表、引用、代码块、图片…'
   });
+  bindImageUpload(quill);
+}
+
+// 把图片文件单独上传到 MinIO（走 POST /v1/upload），返回可访问的 URL。
+// 这样粘贴的图片以 images/{id}.png 独立存储，而不是 base64 内嵌进正文 HTML。
+async function uploadImageFile(file){
+  var fd = new FormData();
+  fd.append('image', file, file.name || ('pasted-' + Date.now() + '.png')); // 字段名必须为 image
+  var res = await fetch(ARTICLE_API + '/upload', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + token }, // 不要手写 Content-Type，交给浏览器带 boundary
+    body: fd
+  });
+  var body = await res.json();
+  // 注意：/upload 返回体是裸的 { image_url }，未包 { code, msg, data }
+  var url = body.image_url || (body.data && body.data.image_url);
+  if(!url) throw new Error(body.msg || '图片上传失败');
+  // 本地开发时后端返回 127.0.0.1:39000，改写走 /minio 代理
+  return url.replace(/^https?:\/\/[^/]+/, '/minio');
+}
+
+function insertImageFile(file){
+  return uploadImageFile(file).then(function(url){
+    var range = quill.getSelection(true) || { index: quill.getLength() };
+    quill.insertEmbed(range.index, 'image', url, 'user');
+    quill.setSelection(range.index + 1);
+  }).catch(function(e){ msg('图片上传失败：' + e.message); });
+}
+
+function bindImageUpload(q){
+  // 1) 粘贴图片：拦截默认的 base64 内嵌行为
+  q.root.addEventListener('paste', function(e){
+    var items = (e.clipboardData || {}).items || [];
+    for(var i = 0; i < items.length; i++){
+      if(items[i].type.indexOf('image') === 0){
+        e.preventDefault();
+        var f = items[i].getAsFile();
+        if(f) insertImageFile(f);
+      }
+    }
+  });
+  // 2) 拖拽图片
+  q.root.addEventListener('drop', function(e){
+    var files = (e.dataTransfer || {}).files || [];
+    for(var i = 0; i < files.length; i++){
+      if(files[i].type.indexOf('image') === 0){
+        e.preventDefault();
+        insertImageFile(files[i]);
+      }
+    }
+  });
+  // 3) 工具栏图片按钮（覆盖 Quill 默认的 base64 行为）
+  var tb = q.getModule('toolbar');
+  if(tb) tb.addHandler('image', function(){
+    var inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'image/*';
+    inp.onchange = function(){ if(inp.files[0]) insertImageFile(inp.files[0]); };
+    inp.click();
+  });
 }
 
 function $(id){ return document.getElementById(id); }
